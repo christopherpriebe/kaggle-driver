@@ -8,7 +8,7 @@ Why does this file exist, and why __main__? For more info, read:
 - https://docs.python.org/2/using/cmdline.html#cmdoption-m
 - https://docs.python.org/3/using/cmdline.html#cmdoption-m
 """
-from kaggle_driver.cli import main
+from kaggle_driver.cli import _builtin_main
 
 if __name__ == "__main__":
-    main()
+    _builtin_main()

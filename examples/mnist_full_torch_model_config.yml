@@ -1,0 +1,4 @@
+input_layer_width: 784
+output_layer_width: 10
+num_hidden_layers: 1
+hidden_layer_width: 1000

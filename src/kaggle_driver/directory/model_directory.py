@@ -8,7 +8,6 @@ from .directory import Directory
 class ModelDirectory(Directory):
     """A class that handles registering models.
     """
-
     @classmethod
     def is_value_valid(cls: Directory, value: Any) -> bool:
         """Returns whether a value is valid for this directory.
@@ -18,10 +17,10 @@ class ModelDirectory(Directory):
         :return: Whether the value is valid.
         :rtype: bool
         """
-        return isinstance(value, Model)
+        return isinstance(value, type) and issubclass(value, Model)
 
 
-def model(_model: Model) -> Model:
+def model(_model: type) -> type:
     """Registers a model.
 
     :param _model: The model to register.
@@ -29,5 +28,10 @@ def model(_model: Model) -> Model:
     :return: The model.
     :rtype: Model
     """
-    ModelDirectory.set(_model.name, _model)
+    if not isinstance(_model, type):
+        raise TypeError(f"Expected type, got {_model}")
+    key: str = _model.__name__
+    if ModelDirectory.contains(key):
+        raise ValueError(f"Model {key} already registered.")
+    ModelDirectory.set(key, _model)
     return _model
