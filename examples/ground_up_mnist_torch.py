@@ -1,10 +1,13 @@
-"""An example of a Kaggle competition driver for the MNIST dataset using
-    PyTorch.
+"""
+Ground-Up MNIST Digit Classification with PyTorch
+=================================================
+
+An example of a Kaggle competition driver for the MNIST dataset using PyTorch.
 
 This example aims to demonstrate how to use the Kaggle Driver to build an
 environment for a Kaggle competition from the ground-up. Therefore, this
 example only builds off of the abstract base classes provided by the Kaggle
-Driver and does not use any of the provided more-concrete implementations that
+Driver and does not use any of the provided helper implementations that
 are available in the Kaggle Driver.
 """
 import shutil
@@ -75,10 +78,10 @@ class MNISTDataset(kd.Dataset):
 
     def load_train(self) -> OrderedDict[str, tuple[kd.Input, kd.Target]]:
         """Loads the raw training dataset and converts it into an ordered
-            dictionary of inputs and targets.
+        dictionary of inputs and targets.
 
         :return: The ordered dictionary of inputs and targets.
-        :rtype: Ordered[str, tuple[Input, Target]]
+        :rtype: OrderedDict[str, tuple[Input, Target]]
         """
         file_path: str = f"{self.raw_train_dir_path}/train.csv"
         data: npt.NDArray = np.loadtxt(file_path, delimiter=",", skiprows=1)
@@ -92,7 +95,7 @@ class MNISTDataset(kd.Dataset):
 
     def load_test(self) -> OrderedDict[str, kd.Input]:
         """Loads the raw test dataset and converts it into an ordered
-            dictionary of inputs.
+        dictionary of inputs.
 
         :return: The ordered dictionary of inputs.
         :rtype: OrderedDict[str, Input]
@@ -126,7 +129,7 @@ class MNISTDataset(kd.Dataset):
 @kd.model
 class MNISTModel(kd.Model):
     """A configurable MLP model for classification using ReLU
-        for all hidden layers and softmax for the output layer.
+    for all hidden layers and softmax for the output layer.
 
     :param input_layer_width: The width of the input layer.
     :type input_layer_width: int
@@ -221,7 +224,7 @@ class MNISTModel(kd.Model):
         res = kd.TrainResult()
 
         # Check that the training data is valid using a local function.
-        for data_point in train_data.data_points():
+        for data_point in train_data:
             check_data_point(data_point)
 
         # Check that the training configuration contains a model path which
@@ -302,7 +305,7 @@ class MNISTModel(kd.Model):
         res = kd.TestResult()
 
         # Check that the testing data is valid using a local function.
-        for data_point in test_data.data_points():
+        for data_point in test_data:
             check_data_point(data_point)
 
         # Check that the training configuration contains a model path which
@@ -341,13 +344,14 @@ competition_name: str = "digit-recognizer"
 # ==============================================================================
 # Define the location of the data
 # ==============================================================================
+curr_dir: str = os.path.dirname(os.path.abspath(__file__))
 data_loc_info = kd.DataLocInfo(
-    raw_train_dir_path="data/raw/train/mnist",
-    raw_test_dir_path="data/raw/test/mnist",
-    interim_train_dir_path="data/interim/train/mnist",
-    interim_test_dir_path="data/interim/test/mnist",
-    processed_train_dir_path="data/processed/train/mnist",
-    processed_test_dir_path="data/processed/test/mnist",
+    raw_train_dir_path=curr_dir + "/../data/raw/train/mnist",
+    raw_test_dir_path=curr_dir + "/../data/raw/test/mnist",
+    interim_train_dir_path=curr_dir + "/../data/interim/train/mnist",
+    interim_test_dir_path=curr_dir + "/../data/interim/test/mnist",
+    processed_train_dir_path=curr_dir + "/..data/processed/train/mnist",
+    processed_test_dir_path=curr_dir + "/..data/processed/test/mnist",
 )
 
 
@@ -396,4 +400,5 @@ kaggle_info = kd.KaggleInfo(
 # Initialize the dataset and driver and call the driver CLI
 # ==============================================================================
 dataset = MNISTDataset(data_loc_info)
-kd.run(dataset, kaggle_info=kaggle_info)
+if __name__ == "__main__":
+    kd.run(dataset, kaggle_info=kaggle_info)

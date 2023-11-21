@@ -4,4 +4,8 @@ Reference
 .. toctree::
     :glob:
 
-    kaggle_driver*
+    cli
+    dataset
+    directory
+    driver
+    model

@@ -1,4 +1,7 @@
 import os
+import sys
+
+sys.path.insert(0, os.path.abspath("../examples"))
 
 extensions = [
     "sphinx.ext.autodoc",
@@ -10,6 +13,7 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.todo",
     "sphinx.ext.viewcode",
+    "sphinx_gallery.gen_gallery",
 ]
 source_suffix = ".rst"
 master_doc = "index"
@@ -18,6 +22,22 @@ year = "2023"
 author = "Christopher Priebe"
 copyright = f"{year}, {author}"
 version = release = "0.0.0"
+
+autodoc_mock_imports = ["numpy", "torch"]
+
+class ResetArgv:
+    def __repr__(self):
+        return 'ResetArgv'
+
+    def __call__(self, sphinx_gallery_conf, script_vars):
+        if script_vars["src_file"] == "ground_up_mnist_torch.py":
+            return ["-h"]
+
+sphinx_gallery_conf = {
+     "examples_dirs": "../examples",
+     "gallery_dirs": "_build/auto_examples",
+     "reset_argv": ResetArgv(),
+}
 
 pygments_style = "trac"
 templates_path = ["."]
