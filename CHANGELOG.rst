@@ -2,7 +2,7 @@
 Changelog
 =========
 
-0.0.0 (2023-06-09)
+0.0.0 (2023-11-21)
 ------------------
 
-* Initial project skeleton added.
+* Initial comand-line interface implemented
