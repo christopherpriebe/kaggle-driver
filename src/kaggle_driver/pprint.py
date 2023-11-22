@@ -1,6 +1,9 @@
 """A module that contains the pretty printer for the kaggle_driver package.
 """
-def pprint_dict(_dict: dict, indent: int = 0) -> str:
+from typing import Any
+
+
+def pprint_dict(_dict: dict[Any, Any], indent: int = 0) -> str:
     """Pretty prints a dictionary.
 
     :param _dict: The dictionary.

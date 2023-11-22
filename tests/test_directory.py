@@ -21,7 +21,7 @@ def dummy_model() -> type:
         def __init__(self) -> None:
             super().__init__("dummy_model")
 
-        def test(self, test_data: dict[str, Input], *args: Any,
+        def test(self, test_data: dict[str, Input], *args: Any,  # pylint: disable=unused-argument
                     **kwargs: Any) -> dict[str, Target]:
             return {}
     return DummyModel

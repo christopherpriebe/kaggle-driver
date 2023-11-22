@@ -97,6 +97,7 @@ class Dataset(abc.ABC):
         """
         if self._train is None:
             self._load_train()
+        assert self._train is not None, "Something went wrong..."
         return self._train
 
     @property
@@ -108,6 +109,7 @@ class Dataset(abc.ABC):
         """
         if self._test is None:
             self._load_test()
+        assert self._test is not None, "Something went wrong..."
         return self._test
 
     def _load_train(self) -> None:
