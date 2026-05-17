@@ -7,7 +7,7 @@ from .input import Input
 
 
 def _check_formatted_data(data: OrderedDict[Any, Any]) -> None:
-    for key, value in data:
+    for key, value in data.items():
         if not isinstance(key, str):
             raise TypeError(
                 "The keys of the data must be strings."
