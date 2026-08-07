@@ -1,94 +1,172 @@
+"""Typer-based CLI that exposes ``download``, ``train``, and ``test`` subcommands.
+
+The CLI is built fresh for each ``kd.run`` invocation so it can close over
+the user's specific ``Dataset``, model classes, and optional ``KaggleInfo``.
+
+This module deliberately avoids ``from __future__ import annotations``:
+Typer relies on ``inspect.get_annotations`` to drive Click options, and
+stringified annotations break when ``Annotated[...]`` references closure
+variables built inside ``build_app``.
 """
-Module that contains the command line app.
 
-Why does this file exist, and why not put this in __main__?
+import logging
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Annotated, Any
 
-  You might be tempted to import things from __main__ later, but that will cause
-  problems: the code will get executed twice:
+import typer
+from immutabledict import immutabledict
 
-  - When you run `python -m kaggle_driver` python will execute
-    ``__main__.py`` as a script. That means there will not be any
-    ``kaggle_driver.__main__`` in ``sys.modules``.
-  - When you import __main__ it will get executed again (as a module) because
-    there"s no ``kaggle_driver.__main__`` in ``sys.modules``.
+from kaggle_driver import driver
+from kaggle_driver.config import load_yaml_config
+from kaggle_driver.core import Dataset, KaggleInfo, Model, freeze_mapping
 
-  Also see (1) from http://click.pocoo.org/5/setuptools/#setuptools-integration
-"""
-import argparse
-from typing import Optional
-from kaggle_driver.dataset import Dataset
-from kaggle_driver.directory.model_directory import ModelDirectory
-from kaggle_driver.driver.driver import Driver
-from kaggle_driver.driver.kaggle_info import KaggleInfo
+__all__ = ["build_app"]
+
+_logger = logging.getLogger(__name__)
 
 
-def _builtin_main() -> None:
-    """Entry point for the application script.
+def _resolve_model(
+    models: Mapping[str, type[Model[Any, Any]]],
+    name: str,
+) -> type[Model[Any, Any]]:
+    """Look up a model class by its CLI-facing name.
+
+    Args:
+        models: Mapping from CLI-facing name to model class.
+        name: Name requested on the command line.
+
+    Returns:
+        The matching model class.
+
+    Raises:
+        typer.BadParameter: ``name`` is not a key of ``models``.
     """
-    raise NotImplementedError("This entry point for Kaggle Driver is not \
-                            implemented yet")
+    try:
+        return models[name]
+    except KeyError as error:
+        valid = ", ".join(sorted(models))
+        raise typer.BadParameter(
+            f"Unknown model {name!r}. Valid choices: {valid}.",
+        ) from error
 
 
-def run(dataset: Dataset, kaggle_info: Optional[KaggleInfo] = None) -> None:
-    """Entry point for the application script built by the user.
+def _load_optional_yaml(path: Path | None) -> immutabledict[str, Any]:
+    """Load a YAML config file if ``path`` is given, otherwise return an empty mapping.
 
-    :param dataset: The dataset.
-    :type dataset: Dataset
-    :param kaggle_info: The information about the Kaggle competition. If None,
-        then the dataset is assumed to be already downloaded and organized
-        into the correct folders.
-    :type kaggle_info: Optional[KaggleInfo]
+    Args:
+        path: Optional path to a YAML file.
+
+    Returns:
+        Parsed YAML as a frozen mapping, or an empty one when ``path`` is
+        ``None``.
     """
-    _user_main(dataset, kaggle_info)
+    if path is None:
+        return immutabledict()
+    return load_yaml_config(path)
 
 
-def _user_main(dataset: Dataset, kaggle_info: Optional[KaggleInfo]) -> None:
-    models: list[str] = ModelDirectory.keys()
+def build_app(
+    dataset: Dataset[Any, Any],
+    models: Mapping[str, type[Model[Any, Any]]],
+    kaggle_info: KaggleInfo | None,
+) -> typer.Typer:
+    """Build a Typer application bound to a specific dataset and model set.
 
-    description: str = "A driver for Kaggle competitions."
-    parser = argparse.ArgumentParser(description=description)
+    Args:
+        dataset: User's ``Dataset`` instance.
+        models: Mapping from CLI-facing model name to model class. Frozen
+            on entry so the built app cannot be reconfigured behind its own
+            back by later edits to the caller's mapping.
+        kaggle_info: Optional Kaggle competition metadata.
 
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Print verbose output to stdout.")
-    # TODO: Add an argument for logging
+    Returns:
+        A Typer ``app`` ready to be called.
 
-    subparsers = parser.add_subparsers(dest="subcommands")
+    Raises:
+        ValueError: ``models`` is empty.
+    """
+    if not models:
+        raise ValueError("`models` must contain at least one entry.")
 
-    download_parser = subparsers.add_parser("download",
-                                            help="Download the dataset.")
+    resolved_models = freeze_mapping(models)
 
-    train_parser = subparsers.add_parser("train", help="Train a model.")
-    train_parser.add_argument("model", choices=models,
-                              help="The model to train.")
-    train_parser.add_argument("--model_config_file", type=str,
-                              required=False,
-                              help="The path to the model config file.")
-    train_parser.add_argument("--train_config_file", type=str,
-                              required=False,
-                              help="The path to the training config file.")
+    app = typer.Typer(
+        help="Driver for a Kaggle competition.",
+        no_args_is_help=True,
+        add_completion=False,
+    )
+    valid_models_help = "One of: " + ", ".join(sorted(resolved_models)) + "."
 
-    test_parser = subparsers.add_parser("test", help="Test a model.")
-    test_parser.add_argument("model", choices=models,
-                             help="The model to test.")
-    test_parser.add_argument("--submission_file", type=str,
-                             help="The path to the submission file.")
-    test_parser.add_argument("--model_config_file", type=str,
-                             required=False,
-                             help="The path to the model config file.")
-    test_parser.add_argument("--test_config_file", type=str,
-                             required=False,
-                             help="The path to the testing config file.")
+    @app.callback()
+    def main(
+        verbose: Annotated[
+            bool,
+            typer.Option("--verbose", "-v", help="Enable verbose logging."),
+        ] = False,
+    ) -> None:
+        """Configure logging for the subcommand."""
+        level = logging.INFO if verbose else logging.WARNING
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        )
 
-    args: argparse.Namespace = parser.parse_args()
-    driver = Driver(dataset, kaggle_info=kaggle_info, verbose=args.verbose)
+    @app.command(name="download")
+    def download_command() -> None:
+        """Download and organize the competition dataset via the Kaggle API."""
+        if kaggle_info is None:
+            raise typer.BadParameter(
+                "`kaggle_info` was not provided to kd.run; cannot download.",
+            )
+        driver.download(dataset, kaggle_info)
 
-    if args.subcommands == "download":
-        driver.download()
-    elif args.subcommands == "train":
-        driver.train(args.model, args.model_config_file,
-                     args.train_config_file)
-    elif args.subcommands == "test":
-        driver.test(args.model, args.model_config_file, args.test_config_file,
-                    args.submission_file)
-    else:
-        raise ValueError("Invalid subcommand.")
+    @app.command(name="train", help=f"Train a model. {valid_models_help}")
+    def train_command(
+        model: Annotated[str, typer.Argument()],
+        model_config: Annotated[
+            Path | None,
+            typer.Option("--model-config", help="YAML file of constructor kwargs."),
+        ] = None,
+        train_config: Annotated[
+            Path | None,
+            typer.Option("--train-config", help="YAML file of training settings."),
+        ] = None,
+    ) -> None:
+        """Train a model on the dataset's training data."""
+        driver.train(
+            dataset,
+            _resolve_model(resolved_models, model),
+            model_config=_load_optional_yaml(model_config),
+            train_config=_load_optional_yaml(train_config),
+        )
+
+    @app.command(
+        name="test",
+        help=f"Generate predictions and write a submission. {valid_models_help}",
+    )
+    def test_command(
+        model: Annotated[str, typer.Argument()],
+        submission: Annotated[
+            Path,
+            typer.Option("--submission", help="Path to write the submission file."),
+        ],
+        model_config: Annotated[
+            Path | None,
+            typer.Option("--model-config", help="YAML file of constructor kwargs."),
+        ] = None,
+        test_config: Annotated[
+            Path | None,
+            typer.Option("--test-config", help="YAML file of test-time settings."),
+        ] = None,
+    ) -> None:
+        """Generate predictions on the test set and write a submission file."""
+        driver.test(
+            dataset,
+            _resolve_model(resolved_models, model),
+            submission_path=submission,
+            model_config=_load_optional_yaml(model_config),
+            test_config=_load_optional_yaml(test_config),
+        )
+
+    return app

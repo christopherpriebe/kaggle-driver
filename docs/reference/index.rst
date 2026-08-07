@@ -2,10 +2,8 @@ Reference
 =========
 
 .. toctree::
-    :glob:
+    :maxdepth: 1
 
+    core
+    integrations
     cli
-    dataset
-    directory
-    driver
-    model
