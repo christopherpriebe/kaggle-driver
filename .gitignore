@@ -20,6 +20,7 @@ pyvenv*/
 
 # Test, coverage, and lint caches
 .pytest_cache/
+runs/
 .ruff_cache/
 .mypy_cache/
 .tox/

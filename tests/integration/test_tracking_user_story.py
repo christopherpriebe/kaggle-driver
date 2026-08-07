@@ -61,7 +61,12 @@ def test_train_then_test_then_inspect_history(
 
     list_result = runner.invoke(app, ["runs", "list"])
     assert list_result.exit_code == 0, list_result.stdout
-    train_id, test_id = (directory.name for directory in run_directories)
+    directories_by_command = {
+        json.loads((directory / "run.json").read_text(encoding="utf-8"))["command"]: directory.name
+        for directory in run_directories
+    }
+    train_id = directories_by_command["train"]
+    test_id = directories_by_command["test"]
     assert train_id in list_result.stdout
     assert test_id in list_result.stdout
     assert list_result.stdout.count("completed") == 2

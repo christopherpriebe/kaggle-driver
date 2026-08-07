@@ -26,8 +26,10 @@ def test_full_train_then_test_pipeline(
     tiny_train_csv: Path,
     tiny_test_csv: Path,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test a user can drive the full train then test cycle via the public CLI."""
+    monkeypatch.chdir(tmp_path)
     dataset = PandasDataset(
         raw_train_directory=tiny_train_csv.parent,
         raw_test_directory=tiny_test_csv.parent,
@@ -75,9 +77,11 @@ def test_full_train_then_test_pipeline(
 def test_run_dispatch_via_public_entrypoint(
     tiny_train_csv: Path,
     tiny_test_csv: Path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test ``kd.run`` builds the same app the CLI tests exercise."""
+    monkeypatch.chdir(tmp_path)
     dataset = PandasDataset(
         raw_train_directory=tiny_train_csv.parent,
         raw_test_directory=tiny_test_csv.parent,

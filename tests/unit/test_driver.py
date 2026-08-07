@@ -331,7 +331,7 @@ def test_train_hooks_receive_frozen_mappings(
     driver.train(
         dummy_dataset,
         _DummyModel,
-        model_config={"alpha": 1},
+        model_config={},
         train_config={"beta": 2},
         tracker=tracking_hook,
     )

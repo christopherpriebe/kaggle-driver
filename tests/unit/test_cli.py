@@ -55,8 +55,11 @@ def test_help_lists_subcommands(
 def test_train_dispatches_to_driver(
     dummy_dataset: _DummyDataset,
     cli_runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test the train subcommand instantiates the named model and calls its train method."""
+    monkeypatch.chdir(tmp_path)
     app = build_dummy_app(dummy_dataset)
 
     result = cli_runner.invoke(app, ["train", "dummy"])
@@ -112,8 +115,10 @@ def test_test_writes_submission(
     dummy_dataset: _DummyDataset,
     cli_runner: CliRunner,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test the test subcommand instantiates the model and writes a submission file."""
+    monkeypatch.chdir(tmp_path)
     app = build_dummy_app(dummy_dataset)
     submission = tmp_path / "submission.csv"
 
@@ -127,8 +132,11 @@ def test_train_loads_optional_yaml(
     dummy_dataset: _DummyDataset,
     cli_runner: CliRunner,
     tmp_yaml_config: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test providing --train-config loads the YAML into a frozen mapping."""
+    monkeypatch.chdir(tmp_path)
     app = build_dummy_app(dummy_dataset)
 
     result = cli_runner.invoke(app, ["train", "dummy", "--train-config", str(tmp_yaml_config)])

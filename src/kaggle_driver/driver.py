@@ -20,7 +20,7 @@ from typing import Any
 from immutabledict import immutabledict
 
 from kaggle_driver.core import Dataset, KaggleInfo, Model, freeze_mapping
-from kaggle_driver.tracking import TrackingHook
+from kaggle_driver.tracking import RunCommand, TrackingHook
 
 __all__ = ["download", "require_kaggle", "test", "train"]
 
@@ -52,6 +52,214 @@ def _extract_single_archive(workspace: Path) -> Path:
         archive.extractall(unzipped_directory)
 
     return unzipped_directory
+
+
+def _resolve_model_name(model_name: str | None, model_class: type[Model[Any, Any]]) -> str:
+    """Return the model name to record, defaulting to the model class name.
+
+    Args:
+        model_name: Name given by the caller, or ``None`` to use the default.
+        model_class: Model class whose name is the default.
+
+    Returns:
+        ``model_name`` if given, otherwise ``model_class.__name__``.
+    """
+    if model_name is not None:
+        return model_name
+    return model_class.__name__
+
+
+def _summarize_error(error: Exception) -> str:
+    """Return a one-line summary of ``error`` for a failed run record.
+
+    Args:
+        error: Exception raised while running a tracked invocation.
+
+    Returns:
+        The exception's type name and message.
+    """
+    return f"{type(error).__name__}: {error}"
+
+
+def _record_model_path_artifact(tracker: TrackingHook, config: Mapping[str, Any]) -> None:
+    """Record the conventional ``model_path`` config value as the model artifact.
+
+    Args:
+        tracker: Tracking hook to record the artifact against.
+        config: Phase config that may contain a ``model_path`` key.
+    """
+    if "model_path" in config:
+        tracker.record_artifact("model", Path(config["model_path"]))
+
+
+def _instantiate_and_train(
+    dataset: Dataset[Any, Any],
+    model_class: type[Model[Any, Any]],
+    model_config: Mapping[str, Any],
+    train_config: Mapping[str, Any],
+) -> immutabledict[str, Any]:
+    """Construct the model and fit it, returning frozen training statistics.
+
+    Args:
+        dataset: User's ``Dataset`` instance.
+        model_class: Model class to instantiate. Constructor receives
+            ``model_config`` as kwargs.
+        model_config: Kwargs forwarded to ``model_class``.
+        train_config: Free-form training configuration passed to
+            ``Model.train``. Frozen before it reaches the model.
+
+    Returns:
+        Frozen training statistics returned by ``Model.train``.
+    """
+    _logger.info("Training model %s", model_class.__name__)
+    model = model_class(**model_config)
+    train_data = freeze_mapping(dataset.load_train())
+    statistics = freeze_mapping(model.train(train_data, freeze_mapping(train_config)))
+    _logger.info("Training complete: %s", statistics)
+    return statistics
+
+
+def _train_tracked(
+    dataset: Dataset[Any, Any],
+    model_class: type[Model[Any, Any]],
+    *,
+    model_config: Mapping[str, Any],
+    train_config: Mapping[str, Any],
+    tracker: TrackingHook,
+    model_name: str | None,
+) -> immutabledict[str, Any]:
+    """Run a tracked train invocation, recording it as a run.
+
+    Args:
+        dataset: User's ``Dataset`` instance.
+        model_class: Model class to instantiate. Constructor receives
+            ``model_config`` as kwargs.
+        model_config: Kwargs forwarded to ``model_class``.
+        train_config: Free-form training configuration passed to
+            ``Model.train``. Frozen before it reaches the model.
+        tracker: Tracking hook recording the run.
+        model_name: Name recorded in the run record, or ``None`` to
+            default to ``model_class.__name__``.
+
+    Returns:
+        Frozen training statistics returned by ``Model.train``.
+
+    Raises:
+        Exception: Propagated unchanged from ``model_class`` or
+            ``Model.train`` after the run is recorded as failed.
+    """
+    tracker.start_run(
+        command=RunCommand.TRAIN,
+        model_name=_resolve_model_name(model_name, model_class),
+        configs={
+            "model_config": freeze_mapping(model_config),
+            "train_config": freeze_mapping(train_config),
+        },
+    )
+    try:
+        statistics = _instantiate_and_train(dataset, model_class, model_config, train_config)
+    except Exception as error:
+        tracker.fail_run(_summarize_error(error))
+        raise
+
+    tracker.record_metrics("train", statistics)
+    _record_model_path_artifact(tracker, train_config)
+    tracker.complete_run()
+    return statistics
+
+
+def _instantiate_and_test(
+    dataset: Dataset[Any, Any],
+    model_class: type[Model[Any, Any]],
+    model_config: Mapping[str, Any],
+    test_config: Mapping[str, Any],
+    submission_path: Path,
+) -> tuple[immutabledict[str, Any], immutabledict[str, Any]]:
+    """Construct the model and generate predictions and test statistics.
+
+    Args:
+        dataset: User's ``Dataset`` instance.
+        model_class: Model class to instantiate. Constructor receives
+            ``model_config`` as kwargs.
+        model_config: Kwargs forwarded to ``model_class``.
+        test_config: Free-form test configuration passed to ``Model.test``.
+            Frozen before it reaches the model.
+        submission_path: File the submission will be written to; used only
+            for logging.
+
+    Returns:
+        Frozen predictions and frozen test statistics returned by
+        ``Model.test``.
+    """
+    _logger.info("Testing model %s, submission -> %s", model_class.__name__, submission_path)
+    model = model_class(**model_config)
+    test_data = freeze_mapping(dataset.load_test())
+    raw_predictions, raw_statistics = model.test(test_data, freeze_mapping(test_config))
+    predictions = freeze_mapping(raw_predictions)
+    statistics = freeze_mapping(raw_statistics)
+    return predictions, statistics
+
+
+def _test_tracked(
+    dataset: Dataset[Any, Any],
+    model_class: type[Model[Any, Any]],
+    *,
+    submission_path: Path,
+    model_config: Mapping[str, Any],
+    test_config: Mapping[str, Any],
+    tracker: TrackingHook,
+    model_name: str | None,
+) -> immutabledict[str, Any]:
+    """Run a tracked test invocation, recording it as a run.
+
+    Args:
+        dataset: User's ``Dataset`` instance.
+        model_class: Model class to instantiate. Constructor receives
+            ``model_config`` as kwargs.
+        submission_path: File path to write the submission to.
+        model_config: Kwargs forwarded to ``model_class``.
+        test_config: Free-form test configuration passed to ``Model.test``.
+            Frozen before it reaches the model.
+        tracker: Tracking hook recording the run.
+        model_name: Name recorded in the run record, or ``None`` to
+            default to ``model_class.__name__``.
+
+    Returns:
+        Frozen test statistics returned by ``Model.test``.
+
+    Raises:
+        Exception: Propagated unchanged from ``model_class`` or
+            ``Model.test`` after the run is recorded as failed; the
+            submission is not written in that case.
+    """
+    tracker.start_run(
+        command=RunCommand.TEST,
+        model_name=_resolve_model_name(model_name, model_class),
+        configs={
+            "model_config": freeze_mapping(model_config),
+            "test_config": freeze_mapping(test_config),
+        },
+    )
+    try:
+        predictions, statistics = _instantiate_and_test(
+            dataset,
+            model_class,
+            model_config,
+            test_config,
+            submission_path,
+        )
+    except Exception as error:
+        tracker.fail_run(_summarize_error(error))
+        raise
+
+    tracker.record_metrics("test", statistics)
+    submission_path.parent.mkdir(parents=True, exist_ok=True)
+    dataset.store_predictions(submission_path, predictions)
+    tracker.record_artifact("submission", submission_path)
+    _record_model_path_artifact(tracker, test_config)
+    tracker.complete_run()
+    _logger.info("Test complete: %s", statistics)
+    return statistics
 
 
 def require_kaggle() -> None:
@@ -149,14 +357,15 @@ def train(
         Frozen training statistics returned by ``Model.train``.
     """
     if tracker is not None:
-        message = f"Run tracking is not implemented yet ({model_name or model_class.__name__})."
-        raise NotImplementedError(message)
-    _logger.info("Training model %s", model_class.__name__)
-    model = model_class(**model_config)
-    train_data = freeze_mapping(dataset.load_train())
-    statistics = freeze_mapping(model.train(train_data, freeze_mapping(train_config)))
-    _logger.info("Training complete: %s", statistics)
-    return statistics
+        return _train_tracked(
+            dataset,
+            model_class,
+            model_config=model_config,
+            train_config=train_config,
+            tracker=tracker,
+            model_name=model_name,
+        )
+    return _instantiate_and_train(dataset, model_class, model_config, train_config)
 
 
 def test(
@@ -195,14 +404,22 @@ def test(
         Frozen test statistics returned by ``Model.test``.
     """
     if tracker is not None:
-        message = f"Run tracking is not implemented yet ({model_name or model_class.__name__})."
-        raise NotImplementedError(message)
-    _logger.info("Testing model %s, submission -> %s", model_class.__name__, submission_path)
-    model = model_class(**model_config)
-    test_data = freeze_mapping(dataset.load_test())
-    raw_predictions, raw_statistics = model.test(test_data, freeze_mapping(test_config))
-    predictions = freeze_mapping(raw_predictions)
-    statistics = freeze_mapping(raw_statistics)
+        return _test_tracked(
+            dataset,
+            model_class,
+            submission_path=submission_path,
+            model_config=model_config,
+            test_config=test_config,
+            tracker=tracker,
+            model_name=model_name,
+        )
+    predictions, statistics = _instantiate_and_test(
+        dataset,
+        model_class,
+        model_config,
+        test_config,
+        submission_path,
+    )
     submission_path.parent.mkdir(parents=True, exist_ok=True)
     dataset.store_predictions(submission_path, predictions)
     _logger.info("Test complete: %s", statistics)

@@ -9,8 +9,10 @@ stringified annotations break when ``Annotated[...]`` references closure
 variables built inside ``build_app``.
 """
 
+import json
 import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -20,10 +22,14 @@ from immutabledict import immutabledict
 from kaggle_driver import driver
 from kaggle_driver.config import load_yaml_config
 from kaggle_driver.core import Dataset, KaggleInfo, Model, freeze_mapping
+from kaggle_driver.tracking import RunDirectoryTracker, RunRecord, list_runs, load_run
 
 __all__ = ["build_app"]
 
 _logger = logging.getLogger(__name__)
+
+_RUN_JSON_FILENAME = "run.json"
+_MINIMUM_COMPARE_RUN_COUNT = 2
 
 
 def _resolve_model(
@@ -66,6 +72,122 @@ def _load_optional_yaml(path: Path | None) -> immutabledict[str, Any]:
     return load_yaml_config(path)
 
 
+@dataclass
+class _TrackingOptions:
+    """Run-tracking options captured by the app callback for the subcommands to read."""
+
+    runs_root: Path = Path("runs")
+    no_track: bool = False
+
+
+def _build_tracker(options: _TrackingOptions) -> RunDirectoryTracker | None:
+    """Build the tracker a train or test invocation should use, if any.
+
+    Args:
+        options: Tracking options captured by the app callback.
+
+    Returns:
+        A fresh :class:`RunDirectoryTracker` rooted at ``options.runs_root``,
+        or ``None`` when ``options.no_track`` is set.
+    """
+    if options.no_track:
+        return None
+    return RunDirectoryTracker(options.runs_root)
+
+
+def _format_metrics_summary(metrics: Mapping[str, Mapping[str, Any]]) -> str:
+    """Build a compact one-line summary of a run's phase metrics.
+
+    Args:
+        metrics: Statistics mappings keyed by phase.
+
+    Returns:
+        A summary such as ``train: sample_count=3``, with phases joined by
+        ``"; "``. Empty when ``metrics`` is empty.
+    """
+    phase_summaries = []
+    for phase, phase_metrics in metrics.items():
+        rendered_metrics = ", ".join(f"{key}={value}" for key, value in phase_metrics.items())
+        phase_summaries.append(f"{phase}: {rendered_metrics}")
+    return "; ".join(phase_summaries)
+
+
+def _format_run_summary(record: RunRecord) -> str:
+    """Build the one-line summary of a run shown by ``runs list``.
+
+    Args:
+        record: Run record to summarize.
+
+    Returns:
+        A line containing the run id, command, model name, status, and a
+        compact metrics summary.
+    """
+    metrics_summary = _format_metrics_summary(record.metrics)
+    return (
+        f"{record.run_id}  {record.command.value:<5}  {record.model_name:<15}  "
+        f"{record.status.value:<9}  {metrics_summary}"
+    )
+
+
+def _metric_keys_for_phase(records: list[RunRecord], phase: str) -> list[str]:
+    """Return the sorted union of metric keys recorded under ``phase``.
+
+    Args:
+        records: Runs being compared.
+        phase: Phase to collect metric keys for.
+
+    Returns:
+        Sorted, deduplicated metric key names.
+    """
+    keys: set[str] = set()
+    for record in records:
+        keys.update(record.metrics.get(phase, {}))
+    return sorted(keys)
+
+
+def _format_compare_table(records: list[RunRecord]) -> str:
+    """Build the aligned plain-text comparison table for two or more runs.
+
+    Args:
+        records: Runs being compared, in the order they should appear as
+            columns.
+
+    Returns:
+        A multi-line table: a header row of run ids, then one row per
+        metric key (grouped by phase, unioned across ``records``), with
+        ``"-"`` where a run lacks that key.
+    """
+    label_width = 20
+    lines = ["  ".join(["metric".ljust(label_width), *(record.run_id for record in records)])]
+    phases = sorted({phase for record in records for phase in record.metrics})
+    for phase in phases:
+        for key in _metric_keys_for_phase(records, phase):
+            row_label = f"{phase}.{key}".ljust(label_width)
+            values = [str(record.metrics.get(phase, {}).get(key, "-")) for record in records]
+            lines.append("  ".join([row_label, *values]))
+    return "\n".join(lines)
+
+
+def _load_run_or_exit(runs_root: Path, run_id: str) -> RunRecord:
+    """Load a run record, converting an unreadable run into a Typer error.
+
+    Args:
+        runs_root: Directory that holds run directories.
+        run_id: Identifier of the run to load.
+
+    Returns:
+        The loaded record.
+
+    Raises:
+        typer.BadParameter: No run matches ``run_id``, or its record cannot
+            be parsed. The message names ``run_id``.
+    """
+    try:
+        return load_run(runs_root, run_id)
+    except (FileNotFoundError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+
+
 def build_app(
     dataset: Dataset[Any, Any],
     models: Mapping[str, type[Model[Any, Any]]],
@@ -97,6 +219,7 @@ def build_app(
         add_completion=False,
     )
     valid_models_help = "One of: " + ", ".join(sorted(resolved_models)) + "."
+    tracking_options = _TrackingOptions()
 
     @app.callback()
     def main(
@@ -114,8 +237,8 @@ def build_app(
         ] = False,
     ) -> None:
         """Configure logging and run tracking for the subcommand."""
-        # Tracking options are wired to the driver during implementation.
-        del runs_root, no_track
+        tracking_options.runs_root = runs_root
+        tracking_options.no_track = no_track
         level = logging.INFO if verbose else logging.WARNING
         logging.basicConfig(
             level=level,
@@ -131,17 +254,24 @@ def build_app(
     @runs_app.command(name="list")
     def list_command() -> None:
         """List recorded runs, one line per run."""
-        raise NotImplementedError
+        for record in list_runs(tracking_options.runs_root):
+            typer.echo(_format_run_summary(record))
 
     @runs_app.command(name="show")
     def show_command(run_id: Annotated[str, typer.Argument()]) -> None:
         """Show the full record of one run."""
-        raise NotImplementedError
+        _load_run_or_exit(tracking_options.runs_root, run_id)
+        run_json_path = tracking_options.runs_root / run_id / _RUN_JSON_FILENAME
+        payload = json.loads(run_json_path.read_text(encoding="utf-8"))
+        typer.echo(json.dumps(payload, indent=2))
 
     @runs_app.command(name="compare")
     def compare_command(run_ids: Annotated[list[str], typer.Argument()]) -> None:
         """Compare the metrics of two or more runs side by side."""
-        raise NotImplementedError
+        if len(run_ids) < _MINIMUM_COMPARE_RUN_COUNT:
+            raise typer.BadParameter("runs compare requires at least two run ids.")
+        records = [_load_run_or_exit(tracking_options.runs_root, run_id) for run_id in run_ids]
+        typer.echo(_format_compare_table(records))
 
     @app.command(name="download")
     def download_command() -> None:
@@ -170,6 +300,8 @@ def build_app(
             _resolve_model(resolved_models, model),
             model_config=_load_optional_yaml(model_config),
             train_config=_load_optional_yaml(train_config),
+            tracker=_build_tracker(tracking_options),
+            model_name=model,
         )
 
     @app.command(
@@ -198,6 +330,8 @@ def build_app(
             submission_path=submission,
             model_config=_load_optional_yaml(model_config),
             test_config=_load_optional_yaml(test_config),
+            tracker=_build_tracker(tracking_options),
+            model_name=model,
         )
 
     return app
