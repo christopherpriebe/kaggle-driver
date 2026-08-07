@@ -250,7 +250,8 @@ def list_runs(runs_root: Path | str) -> tuple[RunRecord, ...]:
     Returns:
         Records sorted by ``run_id``, which sorts chronologically. Entries
         that are not run directories and run directories whose record is
-        unreadable are skipped.
+        unreadable are skipped; each skipped run directory logs one
+        warning.
     """
     raise NotImplementedError
 

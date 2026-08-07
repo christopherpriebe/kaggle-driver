@@ -20,6 +20,7 @@ from typing import Any
 from immutabledict import immutabledict
 
 from kaggle_driver.core import Dataset, KaggleInfo, Model, freeze_mapping
+from kaggle_driver.tracking import TrackingHook
 
 __all__ = ["download", "require_kaggle", "test", "train"]
 
@@ -89,7 +90,7 @@ def download(dataset: Dataset[Any, Any], kaggle_info: KaggleInfo) -> None:
     require_kaggle()
     # The kaggle import is deferred because the kaggle package is an optional
     # extra and reading kaggle.json at import time would break offline users.
-    from kaggle import api  # noqa: PLC0415
+    from kaggle import api
 
     api.authenticate()
 
@@ -121,8 +122,17 @@ def train(
     *,
     model_config: Mapping[str, Any],
     train_config: Mapping[str, Any],
+    tracker: TrackingHook | None = None,
+    model_name: str | None = None,
 ) -> immutabledict[str, Any]:
     """Instantiate the model and fit it on the dataset's training data.
+
+    When a tracker is given, the invocation is recorded as a run:
+    ``start_run`` before the model is instantiated, ``record_metrics``
+    under the ``"train"`` phase, the conventional ``model_path`` config
+    key as the ``model`` artifact when present, and ``complete_run`` on
+    success. If the model raises, ``fail_run`` records the error and the
+    exception propagates unchanged.
 
     Args:
         dataset: User's ``Dataset`` instance.
@@ -131,10 +141,16 @@ def train(
         model_config: Kwargs forwarded to ``model_class``.
         train_config: Free-form training configuration passed to
             ``Model.train``. Frozen before it reaches the model.
+        tracker: Optional tracking hook. ``None`` disables tracking.
+        model_name: Name recorded in the run record. Defaults to
+            ``model_class.__name__``; the CLI passes the CLI-facing name.
 
     Returns:
         Frozen training statistics returned by ``Model.train``.
     """
+    if tracker is not None:
+        message = f"Run tracking is not implemented yet ({model_name or model_class.__name__})."
+        raise NotImplementedError(message)
     _logger.info("Training model %s", model_class.__name__)
     model = model_class(**model_config)
     train_data = freeze_mapping(dataset.load_train())
@@ -150,8 +166,18 @@ def test(
     submission_path: Path,
     model_config: Mapping[str, Any],
     test_config: Mapping[str, Any],
+    tracker: TrackingHook | None = None,
+    model_name: str | None = None,
 ) -> immutabledict[str, Any]:
     """Instantiate the model, generate predictions, and write a submission.
+
+    When a tracker is given, the invocation is recorded as a run:
+    ``start_run`` before the model is instantiated, ``record_metrics``
+    under the ``"test"`` phase, the submission file as the ``submission``
+    artifact, the conventional ``model_path`` config key as the ``model``
+    artifact when present, and ``complete_run`` on success. If the model
+    raises, ``fail_run`` records the error and the exception propagates
+    unchanged.
 
     Args:
         dataset: User's ``Dataset`` instance.
@@ -161,10 +187,16 @@ def test(
         model_config: Kwargs forwarded to ``model_class``.
         test_config: Free-form test configuration passed to ``Model.test``.
             Frozen before it reaches the model.
+        tracker: Optional tracking hook. ``None`` disables tracking.
+        model_name: Name recorded in the run record. Defaults to
+            ``model_class.__name__``; the CLI passes the CLI-facing name.
 
     Returns:
         Frozen test statistics returned by ``Model.test``.
     """
+    if tracker is not None:
+        message = f"Run tracking is not implemented yet ({model_name or model_class.__name__})."
+        raise NotImplementedError(message)
     _logger.info("Testing model %s, submission -> %s", model_class.__name__, submission_path)
     model = model_class(**model_config)
     test_data = freeze_mapping(dataset.load_test())

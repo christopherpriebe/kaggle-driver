@@ -53,20 +53,25 @@ signatures with docstrings are in the interface stub
   `start_run`).
 - `list_runs(runs_root) -> tuple[RunRecord, ...]` - all readable runs,
   sorted by `run_id` (which sorts chronologically). Unreadable run
-  directories are skipped; the `runs list` command prints one warning line
-  per skipped entry.
+  directories are skipped, with one logged warning per skipped entry;
+  the CLI's default logging level (WARNING) makes those visible to
+  `runs list` users.
 - `load_run(runs_root, run_id) -> RunRecord` - one run.
   `FileNotFoundError` if absent, `ValueError` if unparseable.
 
 ### Changed signatures
 
-- `driver.train(..., tracker: TrackingHook | None = None)` and
-  `driver.test(..., tracker: TrackingHook | None = None)`: additive
-  keyword-only parameter. `None` means no tracking, so programmatic
-  callers and the test suite are unaffected. The driver calls
-  `start_run` before instantiating the model, `record_metrics` /
-  `record_artifact` as results appear, `complete_run` on success, and
-  `fail_run` followed by a re-raise when the model raises.
+- `driver.train(..., tracker: TrackingHook | None = None,
+  model_name: str | None = None)` and `driver.test(...)` likewise:
+  additive keyword-only parameters. `tracker=None` means no tracking, so
+  programmatic callers and the test suite are unaffected. `model_name`
+  is the name written into the run record; it defaults to
+  `model_class.__name__`, and the CLI passes the CLI-facing name (the
+  driver never sees the CLI's model mapping, so the name must travel as
+  a parameter). The driver calls `start_run` before instantiating the
+  model, `record_metrics` / `record_artifact` as results appear,
+  `complete_run` on success, and `fail_run` followed by a re-raise when
+  the model raises.
 - CLI: the app callback gains `--runs-root PATH` (default `runs/`) and
   `--no-track`. `train` and `test` construct a `RunDirectoryTracker` unless
   `--no-track` is passed. A new `runs` sub-app provides `runs list`,

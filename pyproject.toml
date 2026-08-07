@@ -138,6 +138,9 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
+# Pytest-style rules apply to test code only; driver.test is a production
+# function whose name happens to start with "test".
+"src/**" = ["PT"]
 "tests/**" = ["D", "S", "PLR2004"]
 "examples/**" = ["D", "S"]
 "docs/conf.py" = ["D", "INP001"]

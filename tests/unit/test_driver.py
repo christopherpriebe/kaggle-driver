@@ -13,6 +13,7 @@ from immutabledict import immutabledict
 
 from kaggle_driver import KaggleInfo, driver
 from kaggle_driver.driver import require_kaggle
+from kaggle_driver.tracking import RunCommand
 from tests.conftest import _DummyDataset, _DummyModel
 
 
@@ -259,3 +260,319 @@ def test_require_kaggle_raises_when_missing() -> None:
         pytest.raises(ImportError, match=r"kaggle-driver\[kaggle\]"),
     ):
         require_kaggle()
+
+
+class _RecordingHook:
+    """Fake ``TrackingHook`` that records every call it receives, in order."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, ...]] = []
+
+    def start_run(
+        self,
+        *,
+        command: RunCommand,
+        model_name: str,
+        configs: Mapping[str, Mapping[str, Any]],
+    ) -> None:
+        self.calls.append(
+            ("start_run", {"command": command, "model_name": model_name, "configs": configs}),
+        )
+
+    def record_metrics(self, phase: str, metrics: Mapping[str, Any]) -> None:
+        self.calls.append(("record_metrics", phase, metrics))
+
+    def record_artifact(self, name: str, path: Path) -> None:
+        self.calls.append(("record_artifact", name, path))
+
+    def complete_run(self) -> None:
+        self.calls.append(("complete_run",))
+
+    def fail_run(self, error: str) -> None:
+        self.calls.append(("fail_run", error))
+
+
+@pytest.fixture
+def tracking_hook() -> _RecordingHook:
+    """Return a fresh recording tracking hook."""
+    return _RecordingHook()
+
+
+def test_train_with_tracker_calls_hooks_in_order(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+) -> None:
+    """Test a tracked train call invokes start_run, record_metrics, complete_run in order."""
+    driver.train(
+        dummy_dataset,
+        _DummyModel,
+        model_config={},
+        train_config={"alpha": 1},
+        tracker=tracking_hook,
+        model_name="dummy",
+    )
+
+    call_names = [call[0] for call in tracking_hook.calls]
+    assert call_names == ["start_run", "record_metrics", "complete_run"]
+    _, start_kwargs = tracking_hook.calls[0]
+    assert start_kwargs["command"] is RunCommand.TRAIN
+    assert start_kwargs["model_name"] == "dummy"
+    assert set(start_kwargs["configs"]) == {"model_config", "train_config"}
+    _, phase, metrics = tracking_hook.calls[1]
+    assert phase == "train"
+    assert dict(metrics) == {"sample_count": 3}
+
+
+def test_train_hooks_receive_frozen_mappings(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+) -> None:
+    """Test configs and metrics passed to the hook are frozen mappings."""
+    driver.train(
+        dummy_dataset,
+        _DummyModel,
+        model_config={"alpha": 1},
+        train_config={"beta": 2},
+        tracker=tracking_hook,
+    )
+
+    _, start_kwargs = tracking_hook.calls[0]
+    for config in start_kwargs["configs"].values():
+        assert isinstance(config, immutabledict)
+    _, _, metrics = tracking_hook.calls[1]
+    assert isinstance(metrics, immutabledict)
+
+
+def test_train_default_model_name_is_class_name(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+) -> None:
+    """Test the recorded model name defaults to the model class name when omitted."""
+    driver.train(
+        dummy_dataset,
+        _DummyModel,
+        model_config={},
+        train_config={},
+        tracker=tracking_hook,
+    )
+
+    _, start_kwargs = tracking_hook.calls[0]
+    assert start_kwargs["model_name"] == "_DummyModel"
+
+
+def test_train_records_model_path_artifact_when_config_declares_it(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+    tmp_path: Path,
+) -> None:
+    """Test a declared model_path in train_config records a model artifact before completion."""
+    model_path = tmp_path / "model.joblib"
+
+    driver.train(
+        dummy_dataset,
+        _DummyModel,
+        model_config={},
+        train_config={"model_path": str(model_path)},
+        tracker=tracking_hook,
+    )
+
+    call_names = [call[0] for call in tracking_hook.calls]
+    assert ("record_artifact", "model", model_path) in tracking_hook.calls
+    assert call_names.index("record_artifact") < call_names.index("complete_run")
+
+
+def test_train_without_model_path_records_no_artifact(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+) -> None:
+    """Test no artifact is recorded when train_config has no model_path key."""
+    driver.train(
+        dummy_dataset,
+        _DummyModel,
+        model_config={},
+        train_config={},
+        tracker=tracking_hook,
+    )
+
+    call_names = [call[0] for call in tracking_hook.calls]
+    assert "record_artifact" not in call_names
+
+
+def test_train_model_exception_fails_run_and_reraises(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+) -> None:
+    """Test a model exception during train fails the run and re-raises unchanged."""
+
+    class _ExplodingModel(_DummyModel):
+        def train(
+            self,
+            train_data: Mapping[str, tuple[int, int]],
+            config: Mapping[str, Any],
+        ) -> Mapping[str, Any]:
+            del train_data, config
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        driver.train(
+            dummy_dataset,
+            _ExplodingModel,
+            model_config={},
+            train_config={},
+            tracker=tracking_hook,
+        )
+
+    call_names = [call[0] for call in tracking_hook.calls]
+    assert call_names[-1] == "fail_run"
+    assert "boom" in tracking_hook.calls[-1][1]
+    assert "record_metrics" not in call_names
+    assert "complete_run" not in call_names
+
+
+def test_train_model_constructor_failure_fails_run(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+) -> None:
+    """Test a model constructor failure still starts and fails the run before re-raising."""
+
+    class _ExplodingConstructorModel(_DummyModel):
+        def __init__(self) -> None:
+            raise RuntimeError("cannot construct")
+
+    with pytest.raises(RuntimeError, match="cannot construct"):
+        driver.train(
+            dummy_dataset,
+            _ExplodingConstructorModel,
+            model_config={},
+            train_config={},
+            tracker=tracking_hook,
+        )
+
+    call_names = [call[0] for call in tracking_hook.calls]
+    assert call_names == ["start_run", "fail_run"]
+
+
+def test_train_returns_statistics_unchanged_when_tracked(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+) -> None:
+    """Test tracking does not alter the statistics returned from train."""
+    untracked = driver.train(
+        dummy_dataset,
+        _DummyModel,
+        model_config={},
+        train_config={},
+    )
+
+    tracked = driver.train(
+        dummy_dataset,
+        _DummyModel,
+        model_config={},
+        train_config={},
+        tracker=tracking_hook,
+    )
+
+    assert tracked == untracked
+
+
+def test_test_default_model_name_is_class_name(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+    tmp_path: Path,
+) -> None:
+    """Test the recorded model name for test defaults to the model class name when omitted."""
+    driver.test(
+        dummy_dataset,
+        _DummyModel,
+        submission_path=tmp_path / "submission.csv",
+        model_config={},
+        test_config={},
+        tracker=tracking_hook,
+    )
+
+    _, start_kwargs = tracking_hook.calls[0]
+    assert start_kwargs["model_name"] == "_DummyModel"
+
+
+def test_test_with_tracker_calls_hooks_in_order(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+    tmp_path: Path,
+) -> None:
+    """Test a tracked test call invokes hooks in order: start, metrics, artifact, complete."""
+    submission = tmp_path / "submission.csv"
+
+    driver.test(
+        dummy_dataset,
+        _DummyModel,
+        submission_path=submission,
+        model_config={},
+        test_config={},
+        tracker=tracking_hook,
+        model_name="dummy",
+    )
+
+    call_names = [call[0] for call in tracking_hook.calls]
+    assert call_names == ["start_run", "record_metrics", "record_artifact", "complete_run"]
+    _, start_kwargs = tracking_hook.calls[0]
+    assert start_kwargs["command"] is RunCommand.TEST
+    assert set(start_kwargs["configs"]) == {"model_config", "test_config"}
+    _, phase, _metrics = tracking_hook.calls[1]
+    assert phase == "test"
+    assert tracking_hook.calls[2] == ("record_artifact", "submission", submission)
+
+
+def test_test_records_model_path_artifact_from_test_config(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+    tmp_path: Path,
+) -> None:
+    """Test a declared model_path in test_config adds a model artifact with the submission."""
+    submission = tmp_path / "submission.csv"
+    model_path = tmp_path / "model.joblib"
+
+    driver.test(
+        dummy_dataset,
+        _DummyModel,
+        submission_path=submission,
+        model_config={},
+        test_config={"model_path": str(model_path)},
+        tracker=tracking_hook,
+    )
+
+    artifact_calls = {
+        call[1]: call[2] for call in tracking_hook.calls if call[0] == "record_artifact"
+    }
+    assert artifact_calls == {"submission": submission, "model": model_path}
+
+
+def test_test_model_exception_fails_run_and_reraises(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+    tmp_path: Path,
+) -> None:
+    """Test a model exception during test fails the run, re-raises, and skips the submission."""
+    submission = tmp_path / "submission.csv"
+
+    class _ExplodingModel(_DummyModel):
+        def test(
+            self,
+            test_data: Mapping[str, int],
+            config: Mapping[str, Any],
+        ) -> tuple[Mapping[str, int], Mapping[str, Any]]:
+            del test_data, config
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        driver.test(
+            dummy_dataset,
+            _ExplodingModel,
+            submission_path=submission,
+            model_config={},
+            test_config={},
+            tracker=tracking_hook,
+        )
+
+    call_names = [call[0] for call in tracking_hook.calls]
+    assert call_names[-1] == "fail_run"
+    assert not submission.exists()

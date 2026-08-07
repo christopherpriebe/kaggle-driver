@@ -104,13 +104,44 @@ def build_app(
             bool,
             typer.Option("--verbose", "-v", help="Enable verbose logging."),
         ] = False,
+        runs_root: Annotated[
+            Path,
+            typer.Option("--runs-root", help="Directory that holds recorded runs."),
+        ] = Path("runs"),
+        no_track: Annotated[
+            bool,
+            typer.Option("--no-track", help="Disable run recording for this invocation."),
+        ] = False,
     ) -> None:
-        """Configure logging for the subcommand."""
+        """Configure logging and run tracking for the subcommand."""
+        # Tracking options are wired to the driver during implementation.
+        del runs_root, no_track
         level = logging.INFO if verbose else logging.WARNING
         logging.basicConfig(
             level=level,
             format="%(asctime)s %(name)s %(levelname)s %(message)s",
         )
+
+    runs_app = typer.Typer(
+        help="Inspect recorded runs.",
+        no_args_is_help=True,
+    )
+    app.add_typer(runs_app, name="runs")
+
+    @runs_app.command(name="list")
+    def list_command() -> None:
+        """List recorded runs, one line per run."""
+        raise NotImplementedError
+
+    @runs_app.command(name="show")
+    def show_command(run_id: Annotated[str, typer.Argument()]) -> None:
+        """Show the full record of one run."""
+        raise NotImplementedError
+
+    @runs_app.command(name="compare")
+    def compare_command(run_ids: Annotated[list[str], typer.Argument()]) -> None:
+        """Compare the metrics of two or more runs side by side."""
+        raise NotImplementedError
 
     @app.command(name="download")
     def download_command() -> None:
