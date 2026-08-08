@@ -292,6 +292,20 @@ class _RecordingHook:
         self.calls.append(("fail_run", error))
 
 
+def read_start_kwargs(hook: _RecordingHook) -> dict[str, Any]:
+    """Return the keyword arguments captured from the hook's first start_run call.
+
+    Args:
+        hook: Recording hook whose first recorded call is a start_run call.
+
+    Returns:
+        The keyword arguments passed to that start_run call.
+    """
+    _, start_kwargs = hook.calls[0]
+    assert isinstance(start_kwargs, dict)
+    return start_kwargs
+
+
 @pytest.fixture
 def tracking_hook() -> _RecordingHook:
     """Return a fresh recording tracking hook."""
@@ -314,7 +328,7 @@ def test_train_with_tracker_calls_hooks_in_order(
 
     call_names = [call[0] for call in tracking_hook.calls]
     assert call_names == ["start_run", "record_metrics", "complete_run"]
-    _, start_kwargs = tracking_hook.calls[0]
+    start_kwargs = read_start_kwargs(tracking_hook)
     assert start_kwargs["command"] is RunCommand.TRAIN
     assert start_kwargs["model_name"] == "dummy"
     assert set(start_kwargs["configs"]) == {"model_config", "train_config"}
@@ -336,7 +350,7 @@ def test_train_hooks_receive_frozen_mappings(
         tracker=tracking_hook,
     )
 
-    _, start_kwargs = tracking_hook.calls[0]
+    start_kwargs = read_start_kwargs(tracking_hook)
     for config in start_kwargs["configs"].values():
         assert isinstance(config, immutabledict)
     _, _, metrics = tracking_hook.calls[1]
@@ -356,7 +370,7 @@ def test_train_default_model_name_is_class_name(
         tracker=tracking_hook,
     )
 
-    _, start_kwargs = tracking_hook.calls[0]
+    start_kwargs = read_start_kwargs(tracking_hook)
     assert start_kwargs["model_name"] == "_DummyModel"
 
 
@@ -490,7 +504,7 @@ def test_test_default_model_name_is_class_name(
         tracker=tracking_hook,
     )
 
-    _, start_kwargs = tracking_hook.calls[0]
+    start_kwargs = read_start_kwargs(tracking_hook)
     assert start_kwargs["model_name"] == "_DummyModel"
 
 
@@ -514,7 +528,7 @@ def test_test_with_tracker_calls_hooks_in_order(
 
     call_names = [call[0] for call in tracking_hook.calls]
     assert call_names == ["start_run", "record_metrics", "record_artifact", "complete_run"]
-    _, start_kwargs = tracking_hook.calls[0]
+    start_kwargs = read_start_kwargs(tracking_hook)
     assert start_kwargs["command"] is RunCommand.TEST
     assert set(start_kwargs["configs"]) == {"model_config", "test_config"}
     _, phase, _metrics = tracking_hook.calls[1]

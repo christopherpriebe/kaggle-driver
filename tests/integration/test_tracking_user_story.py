@@ -52,11 +52,8 @@ def test_train_then_test_then_inspect_history(
     assert train_result.exit_code == 0, train_result.stdout
     assert test_result.exit_code == 0, test_result.stdout
     runs_root = tmp_path / "runs"
-    run_directories = (
-        sorted(entry for entry in runs_root.iterdir() if entry.is_dir())
-        if runs_root.is_dir()
-        else []
-    )
+    assert runs_root.is_dir()
+    run_directories = sorted(entry for entry in runs_root.iterdir() if entry.is_dir())
     assert len(run_directories) == 2
 
     list_result = runner.invoke(app, ["runs", "list"])
@@ -112,7 +109,8 @@ def test_failed_training_is_recorded_and_visible(
 
     assert train_result.exit_code != 0
     runs_root = tmp_path / "runs"
-    run_directories = list(runs_root.iterdir()) if runs_root.is_dir() else []
+    assert runs_root.is_dir()
+    run_directories = list(runs_root.iterdir())
     assert len(run_directories) == 1
     record = json.loads((run_directories[0] / "run.json").read_text(encoding="utf-8"))
     assert record["status"] == "failed"

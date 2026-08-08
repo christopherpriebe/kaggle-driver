@@ -30,9 +30,15 @@ _RUN_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{4}$")
 
 
 @pytest.fixture
-def tracker(tmp_path: Path) -> RunDirectoryTracker:
+def runs_root(tmp_path: Path) -> Path:
+    """Return a temporary runs root path that has not yet been created."""
+    return tmp_path / "runs"
+
+
+@pytest.fixture
+def tracker(runs_root: Path) -> RunDirectoryTracker:
     """Return a fresh, unstarted tracker rooted at a temporary runs directory."""
-    return RunDirectoryTracker(tmp_path / "runs")
+    return RunDirectoryTracker(runs_root)
 
 
 def start_tracked_run(
@@ -108,19 +114,18 @@ def test_run_id_matches_timestamp_and_suffix_shape(tracker: RunDirectoryTracker)
     assert _RUN_ID_PATTERN.fullmatch(tracker.run_id)
 
 
-def test_run_directory_is_runs_root_child_named_by_run_id(tmp_path: Path) -> None:
+def test_run_directory_is_runs_root_child_named_by_run_id(
+    tracker: RunDirectoryTracker,
+    runs_root: Path,
+) -> None:
     """Test the run directory sits directly under the runs root, named for the run id."""
-    runs_root = tmp_path / "runs"
-    tracker_instance = RunDirectoryTracker(runs_root)
+    start_tracked_run(tracker)
 
-    start_tracked_run(tracker_instance)
-
-    assert tracker_instance.run_directory == runs_root / tracker_instance.run_id
+    assert tracker.run_directory == runs_root / tracker.run_id
 
 
-def test_run_ids_are_unique_across_rapid_starts(tmp_path: Path) -> None:
+def test_run_ids_are_unique_across_rapid_starts(runs_root: Path) -> None:
     """Test five trackers started back-to-back against one root get distinct run ids."""
-    runs_root = tmp_path / "runs"
     trackers = [RunDirectoryTracker(runs_root) for _ in range(5)]
 
     for candidate in trackers:
@@ -364,9 +369,8 @@ def test_list_runs_empty_root_returns_empty_tuple(tmp_path: Path) -> None:
     assert result == ()
 
 
-def test_list_runs_returns_records_sorted_by_run_id(tmp_path: Path) -> None:
+def test_list_runs_returns_records_sorted_by_run_id(runs_root: Path) -> None:
     """Test list_runs returns completed runs sorted by run id."""
-    runs_root = tmp_path / "runs"
     run_ids = [complete_tracked_run(RunDirectoryTracker(runs_root)) for _ in range(3)]
 
     result = list_runs(runs_root)
@@ -379,15 +383,15 @@ def test_list_runs_returns_records_sorted_by_run_id(tmp_path: Path) -> None:
 
 
 def test_list_runs_ignores_non_run_entries(
-    tmp_path: Path,
+    tracker: RunDirectoryTracker,
+    runs_root: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test a stray file is silently ignored while a run-less directory warns."""
-    runs_root = tmp_path / "runs"
     runs_root.mkdir()
     (runs_root / "notes.txt").write_text("not a run", encoding="utf-8")
     (runs_root / "not-a-run-id").mkdir()
-    run_id = complete_tracked_run(RunDirectoryTracker(runs_root))
+    run_id = complete_tracked_run(tracker)
 
     with caplog.at_level(logging.WARNING):
         result = list_runs(runs_root)
@@ -398,11 +402,10 @@ def test_list_runs_ignores_non_run_entries(
 
 
 def test_list_runs_skips_corrupt_record_with_warning(
-    tmp_path: Path,
+    runs_root: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test a corrupt run.json is skipped with one warning naming its directory."""
-    runs_root = tmp_path / "runs"
     good_run_id = complete_tracked_run(RunDirectoryTracker(runs_root))
     corrupt_run_id = complete_tracked_run(RunDirectoryTracker(runs_root))
     (runs_root / corrupt_run_id / "run.json").write_text("not json", encoding="utf-8")
@@ -416,9 +419,8 @@ def test_list_runs_skips_corrupt_record_with_warning(
     assert [record.run_id for record in result] == [good_run_id]
 
 
-def test_list_runs_includes_running_and_failed_runs(tmp_path: Path) -> None:
+def test_list_runs_includes_running_and_failed_runs(runs_root: Path) -> None:
     """Test list_runs includes runs that are still running or have failed."""
-    runs_root = tmp_path / "runs"
     running_tracker = RunDirectoryTracker(runs_root)
     start_tracked_run(running_tracker)
     failed_tracker = RunDirectoryTracker(runs_root)
@@ -432,13 +434,14 @@ def test_list_runs_includes_running_and_failed_runs(tmp_path: Path) -> None:
     assert statuses_by_id[failed_tracker.run_id] == RunStatus.FAILED
 
 
-def test_list_runs_records_have_frozen_mappings(tmp_path: Path) -> None:
+def test_list_runs_records_have_frozen_mappings(
+    tracker: RunDirectoryTracker,
+    runs_root: Path,
+) -> None:
     """Test records returned by list_runs carry a frozen metrics mapping."""
-    runs_root = tmp_path / "runs"
-    tracker_instance = RunDirectoryTracker(runs_root)
-    start_tracked_run(tracker_instance)
-    tracker_instance.record_metrics("train", {"sample_count": 1})
-    tracker_instance.complete_run()
+    start_tracked_run(tracker)
+    tracker.record_metrics("train", {"sample_count": 1})
+    tracker.complete_run()
 
     result = list_runs(runs_root)
 
@@ -451,24 +454,26 @@ def test_list_runs_records_have_frozen_mappings(tmp_path: Path) -> None:
 # load_run
 
 
-def test_load_run_round_trips_completed_record(tmp_path: Path) -> None:
+def test_load_run_round_trips_completed_record(
+    tracker: RunDirectoryTracker,
+    runs_root: Path,
+    tmp_path: Path,
+) -> None:
     """Test load_run reproduces every field of a completed run written by the tracker."""
-    runs_root = tmp_path / "runs"
-    tracker_instance = RunDirectoryTracker(runs_root)
     start_tracked_run(
-        tracker_instance,
+        tracker,
         command=RunCommand.TRAIN,
         model_name="logistic_regression",
         configs={"model_config": {"a": 1}, "train_config": {"b": 2}},
     )
-    tracker_instance.record_metrics("train", {"sample_count": 3})
+    tracker.record_metrics("train", {"sample_count": 3})
     artifact_path = tmp_path / "model.joblib"
-    tracker_instance.record_artifact("model", artifact_path)
-    tracker_instance.complete_run()
+    tracker.record_artifact("model", artifact_path)
+    tracker.complete_run()
 
-    record = load_run(runs_root, tracker_instance.run_id)
+    record = load_run(runs_root, tracker.run_id)
 
-    assert record.run_id == tracker_instance.run_id
+    assert record.run_id == tracker.run_id
     assert record.command is RunCommand.TRAIN
     assert record.model_name == "logistic_regression"
     assert record.status is RunStatus.COMPLETED
@@ -481,10 +486,12 @@ def test_load_run_round_trips_completed_record(tmp_path: Path) -> None:
     assert record.config_paths["train_config"] == Path("configs/train_config.yaml")
 
 
-def test_load_run_accepts_string_runs_root(tmp_path: Path) -> None:
+def test_load_run_accepts_string_runs_root(
+    tracker: RunDirectoryTracker,
+    runs_root: Path,
+) -> None:
     """Test load_run accepts a string runs root with the same result as a Path."""
-    runs_root = tmp_path / "runs"
-    run_id = complete_tracked_run(RunDirectoryTracker(runs_root))
+    run_id = complete_tracked_run(tracker)
 
     from_string_root = load_run(str(runs_root), run_id)
     from_path_root = load_run(runs_root, run_id)
