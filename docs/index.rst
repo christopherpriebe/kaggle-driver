@@ -8,7 +8,8 @@ Contents
    readme
    installation
    usage
-   _build/auto_examples/index
+   tutorial_tabular
+   tutorial_mnist
    reference/index
    contributing
    authors

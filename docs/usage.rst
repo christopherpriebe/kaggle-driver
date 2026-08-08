@@ -2,145 +2,141 @@
 Usage
 =====
 
-The Kaggle Driver implements boiler plate code for Kaggle competitions so that you can focus on the fun stuff.
-This package can be used to easily create a command line interface for Kaggle Competition model development.
-.. If you would prefer your development to be completely encapsulated in Python scripts/software or Jupyter Notebooks, the Kaggle Driver also supports this.
+This page walks through the public surface of ``kaggle-driver`` at a
+high level. For end-to-end examples see :doc:`tutorial_tabular` and
+:doc:`tutorial_mnist`.
 
-----------------------------
-Kaggle Driver as CLI Builder
-----------------------------
-The Kaggle Driver can be used to create an easy-to-use command line interface for your Kaggle Competition model development.
-The CLI will allow you to download the dataset, train/test various models, and create a submission file for the competition.
+The mental model
+================
 
-At a very high-level, let's go through the basic steps to create a CLI for your Kaggle Competition model development.
-Before you start, remember to import the package in all Python files::
+A competition pipeline has three moving parts:
 
-    import kaggle_driver as kd
+1. A :class:`~kaggle_driver.Dataset` subclass that knows how to read the
+   raw competition files from disk and write a submission file back out.
+2. One or more :class:`~kaggle_driver.Model` subclasses that own the
+   model architecture and implement train, test, save, and load.
+3. An optional :class:`~kaggle_driver.KaggleInfo` describing the
+   competition for the Kaggle API integration.
 
-The goal of any machine learning model is to approximate an underlying function that maps input features to a target variable.
-Therefore, the first step in creating a CLI for your Kaggle Competition model development is to define class a for the input features and a class for the target variable.
-These classes should inherit from the ``kaggle_driver.Input`` and ``kaggle_driver.Target`` classes, respectively.
-For example, if your input features are images and you are performing classification, you might define the following classes::
+Once you have those, you call :func:`kaggle_driver.run` from your driver
+script. ``run`` builds a Typer CLI for you with ``download``, ``train``,
+and ``test`` subcommands and dispatches based on ``sys.argv``.
 
-    class Image(kd.Input):
-        def __init__(self, image):
-            self.image = image
+Defining a dataset
+==================
 
+:class:`~kaggle_driver.Dataset` is generic over an input type ``InputT``
+and a target type ``TargetT``. Subclasses pick those types freely. The base
+class gives you two read-only properties (``raw_train_directory``,
+``raw_test_directory``) and asks you to implement three abstract methods:
 
-    class Label(kd.Target):
-        def __init__(self, label):
-            self.label = label
+.. code-block:: python
 
-Notice that these classes can define any underlying behavior that is desired by the user such as format conversion/checking (i.e., if the image was passed as a list converting to a NumPy NDArray and ensuring all values are floats in a certain range).
-The behaviour for converting the `Input`` objects into valid model inputs and the model outputs into `Target` objects will be defined later.
+    class MyDataset(kd.Dataset[MyInput, MyTarget]):
+        def load_train(self) -> Mapping[str, tuple[MyInput, MyTarget]]: ...
+        def load_test(self) -> Mapping[str, MyInput]: ...
+        def store_predictions(self, path: Path, predictions: Mapping[str, MyTarget]) -> None: ...
 
-Next, you will need to define a class to describe the dataset for the competition.
-As you might expect, this class will inherit from the ``kaggle_driver.Dataset`` class::
+Example ids drive both the training pairs and the submission ordering.
+The mapping returned by ``load_test`` controls the order of rows in the
+submission file.
 
-    class MyDataset(kd.Dataset):
-        ...
+Return an ordinary ``dict`` if that is convenient. The framework freezes
+it into an ``immutabledict`` before handing it to the model, so no later
+stage can mutate data an earlier one still holds.
 
-Unlike the ``Input`` and ``Target`` classes, the ``Dataset`` class requires the user to implement abstract methods.
-These methods are ``load_train``, ``load_test``, and ``store_predictions``.
-For examples on how each of these methods are implemented for various Kaggle Competitions, see :ref:`Examples<>`.
+Defining a model
+================
 
-Let's look at the first method to be implemented::
+:class:`~kaggle_driver.Model` is generic over the same ``InputT`` and
+``TargetT`` type variables. Subclasses must implement four methods:
 
-    def load_train(self) -> OrderedDict[str, tuple[Input, Target]]:
-        ...
+.. code-block:: python
 
-This method loads the training data from some source and constructs and ordered mapping from training example names to the input features and target value for that example.
+    class MyModel(kd.Model[MyInput, MyTarget]):
+        def __init__(self, **hyperparameters: Any) -> None: ...
+        def train(self, train_data, config) -> Mapping[str, Any]: ...
+        def test(self, test_data, config) -> tuple[Mapping[str, MyTarget], Mapping[str, Any]]: ...
+        def save(self, path: Path) -> None: ...
 
-The next method to be implemented is::
+        @classmethod
+        def load(cls, path: Path) -> "MyModel": ...
 
-    def load_test(self) -> OrderedDict[str, Input]:
-        ...
+The framework instantiates the model class with kwargs from a model
+config YAML file. ``train`` and ``test`` receive the data and a per-call
+config, both frozen. They return free-form statistics; the framework logs
+them but does not interpret them. Statistics and predictions are frozen on
+the way back out, so anything the framework returns to the caller is an
+``immutabledict``.
 
-This method loads the test data from some source and constructs and ordered mapping from test example names to the input features for that example.
+Wiring up the CLI
+=================
 
-The final method to be implemented is::
+Your driver script ends with:
 
-    def store_predictions(self, predictions_file: str, predictions: dict[str, Target]) -> None:
-        ...
+.. code-block:: python
 
-This method uses the file path to the submission file and the mapping from test example names to target values to create a submission file for the competition.
+    dataset = MyDataset(raw_train_directory=..., raw_test_directory=...)
 
-Now that you have defined the classes for the input features, target values, and dataset, you can define the class for the model.
-This class will inherit from the ``kaggle_driver.Model`` class.
-When working towards a solution for a Kaggle Competition, you will likely want to try many different model architectures where each model architecture can be parametrized by many hyperparameters.
-Kaggle Driver supports this by allowing you to define parametrizable classes for each model architecture and registering the model classes with an internal directory.
-Then, during training/testing, you will only need to pass the name of the model architecture and the hyperparameter values to use and the rest will be done for you.
-Let's look at an example of how to define a parametrizable class for a model architecture::
-
-    @kd.model
-    class MyModel(kd.Model):
-        def __init__(self, param1: int, param2: float):
-            super().__init__("my_model")
-
-            self.check_param1(param1)
-            self.check_param2(param2)
-
-            self.param1 = param1
-            self.param2 = param2
-
-            self.model = ...
-
-        def check_param1(self, param1: int) -> None:
-            if param1 < 0:
-                raise ValueError("param1 must be non-negative")
-
-        def check_param2(self, param2: float) -> None:
-            if param2 < 0.0 or param2 > 1.0:
-                raise ValueError("param2 must be in the range [0.0, 1.0]")
-
-        ...
-
-This model, which I have named `my_model` by passing the string `"my_model"` to the ``__init__`` method of the ``Model`` class, has two parameters, ``param1`` and ``param2``, that can be used during training and testing.
-The ``check_param1`` and ``check_param2`` methods are used to check that the values passed to the parameters are valid.
-While it is not stricly necessary to check the values of the parameters, it is recommended to do so to avoid errors later on.
-The model class also contains a ``model`` attribute that is used to store the actual model architecture.
-There are two additional methods that must be implemented by the user: ``train`` and ``test``.
-
-Let's look at the ``train`` method first::
-
-    def train(self, train_data: TrainData, train_config: TrainConfig) -> TrainResult:
-        ...
-
-This method takes in the training data and training config (i.e., the number of epochs to train for, the batch size, etc.), trains the model, and return some training results (i.e., average loss, accuracy, etc.).
-The ``TrainData`` class is wrapper class for storing the training data and can be iterated over to get the input features/target values for each training example.
-The ``TrainConfig`` and ``TrainResult`` classes are essentially dictionaries that store training configuration parameter values and training results, respectively.
-
-The ``test`` method is similar to the ``train`` method::
-
-    def test(self, test_data: TestData, test_config: TestConfig) -> tuple[dict[str, Target], TestResult]:
-        ...
-
-This method takes in the test data and test config (i.e., the batch size, etc.), tests the model, and returns the predictions and some test results (i.e., average loss, accuracy, etc.).
-The ``TestData``, ``TestConfig``, and ``TestResult`` classes function in a similar manner to their training counterparts.
-
-Now, given that you will provide the input data on your own, there is one final step to creating the CLI for your Kaggle Competition model development.
-You need to create an instance of your custom dataset class and pass it to a function that will initialize the CLI::
-
-    dataset = MyDataset()
     if __name__ == "__main__":
-        kd.run(dataset)
+        kd.run(
+            dataset,
+            models={"v1": MyModelV1, "v2": MyModelV2},
+            kaggle_info=optional_kaggle_info,
+        )
 
-Now, you can run your CLI with the following command::
+The dict keys passed as ``models`` are the names used on the CLI; users
+do not see your Python class names. ``kaggle_info`` is required if you
+want the ``download`` subcommand and may be omitted otherwise.
 
-    python3 my_script.py -h
+Run it:
 
-This will print out the help message for the CLI.
-When training/testing a model, you will need to pass the name of the model architecture from earlier and a configuration file that contains the hyperparameter values to use.
-The fields in the configuration file must match the names of the parameters in the model class.
-For example, if you wanted to train a model with the name `my_model` and the hyperparameter values ``param1 = 1`` and ``param2 = 0.5``, you would run the following command::
+.. code-block:: bash
 
-    python3 my_script.py train my_model --model_config_file config.yml
+    python driver.py --help
+    python driver.py download
+    python driver.py train v1 --model-config m.yml --train-config t.yml
+    python driver.py test v1 --submission submission.csv --test-config t.yml
 
-where ``config.yml`` contains the following::
+Tracking runs
+=============
 
-    param1: 1
-    param2: 0.5
+Every ``train`` and ``test`` invocation is recorded as a run by default.
+A run is a directory under ``runs/`` (next to wherever you invoked the
+CLI) holding a ``run.json`` record: the subcommand, the model name, the
+lifecycle status, timestamps, the statistics the model returned, paths
+to produced artifacts, and YAML snapshots of the resolved configs. A
+run that fails records the error summary and a ``failed`` status, so
+failed experiments stay visible.
 
-Now, this is a very high-level overview of how to create a CLI for your Kaggle Competition model development.
-Many details were left out for brevity.
-If you would like to see complete examples of how to use the Kaggle Driver to create a CLI for your Kaggle Competition model development, see :ref:`Examples<>`.
+Inspect recorded runs with the ``runs`` subcommands:
+
+.. code-block:: bash
+
+    python driver.py runs list
+    python driver.py runs show 20260807T120301Z-1a2b
+    python driver.py runs compare 20260807T120301Z-1a2b 20260807T130502Z-3c4d
+
+Two app-level options control recording:
+
+* ``--runs-root PATH`` records runs under ``PATH`` instead of ``runs/``.
+* ``--no-track`` disables recording for the invocation.
+
+Built-in helpers
+================
+
+If your competition fits a common shape, you can skip writing the
+``Dataset`` and ``Model`` subclasses yourself:
+
+* :class:`kaggle_driver.integrations.pandas.PandasDataset` reads flat
+  ``train.csv`` and ``test.csv`` files. See :doc:`tutorial_tabular`.
+* :class:`kaggle_driver.integrations.sklearn.SklearnModel` wraps any
+  scikit-learn estimator into the ``Model`` API. See
+  :doc:`tutorial_tabular`.
+* :class:`kaggle_driver.integrations.torch.TorchModel` is an abstract base
+  for PyTorch users; it handles persistence and device selection so you
+  only implement the architecture and the training loop. See
+  :doc:`tutorial_mnist`.
+
+Each helper lives behind its own install extra
+(``kaggle-driver[pandas]``, ``[sklearn]``, ``[torch]``).

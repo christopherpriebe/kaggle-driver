@@ -1,22 +1,38 @@
-# To install the git pre-commit hooks run:
-#   pre-commit install --install-hooks
-# To update the versions:
-#   pre-commit autoupdate
-exclude: '^(\.tox|ci/templates|\.bumpversion\.cfg)(/|$)'
-# Note the order is intentional to avoid multiple passes of the hooks
+# Run with: pre-commit install --install-hooks
+# Refresh hooks with: pre-commit autoupdate
+exclude: '^(\.venv|\.tox|build|dist|docs/_build)(/|$)'
 repos:
-  - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: main
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix, --show-fixes]
-  - repo: https://github.com/psf/black
-    rev: main
-    hooks:
-      - id: black
+      - id: ruff-format
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: main
+    rev: v4.6.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
-      - id: debug-statements
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=500]
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (strict)
+        entry: uv run mypy src/kaggle_driver
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: pylint
+        name: pylint
+        entry: uv run pylint src/kaggle_driver
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: no-em-dashes
+        name: forbid em dashes in committed text
+        entry: scripts/check_no_em_dashes.sh
+        language: script
+        pass_filenames: false
