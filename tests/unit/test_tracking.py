@@ -29,6 +29,25 @@ from kaggle_driver.tracking import (
 _RUN_ID_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{4}$")
 
 
+def build_run_payload(**overrides: Any) -> dict[str, Any]:
+    """Return a complete, valid run.json payload with keyword overrides applied."""
+    payload: dict[str, Any] = {
+        "schema_version": RUN_SCHEMA_VERSION,
+        "run_id": "20260101T000000Z-abcd",
+        "command": "train",
+        "model_name": "dummy_model",
+        "status": "completed",
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "finished_at": None,
+        "error": None,
+        "metrics": {},
+        "artifacts": {},
+        "configs": {},
+    }
+    payload.update(overrides)
+    return payload
+
+
 @pytest.fixture
 def runs_root(tmp_path: Path) -> Path:
     """Return a temporary runs root path that has not yet been created."""
@@ -133,6 +152,27 @@ def test_run_ids_are_unique_across_rapid_starts(runs_root: Path) -> None:
 
     run_ids = {candidate.run_id for candidate in trackers}
     assert len(run_ids) == 5
+
+
+def test_start_run_retries_on_run_id_collision(
+    runs_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test a run id colliding with an existing directory is regenerated."""
+    colliding_id = "20260101T000000Z-aaaa"
+    fresh_id = "20260101T000000Z-bbbb"
+    (runs_root / colliding_id).mkdir(parents=True)
+    generated_ids = iter([colliding_id, fresh_id])
+    monkeypatch.setattr(
+        "kaggle_driver.tracking._generate_run_id",
+        lambda: next(generated_ids),
+    )
+    tracker_instance = RunDirectoryTracker(runs_root)
+
+    start_tracked_run(tracker_instance)
+
+    assert tracker_instance.run_id == fresh_id
+    assert tracker_instance.run_directory == runs_root / fresh_id
 
 
 # start_run
@@ -419,6 +459,27 @@ def test_list_runs_skips_corrupt_record_with_warning(
     assert [record.run_id for record in result] == [good_run_id]
 
 
+def test_list_runs_skips_record_with_wrong_typed_field(
+    runs_root: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test a record whose metrics field is not a mapping is skipped with a warning."""
+    good_run_id = complete_tracked_run(RunDirectoryTracker(runs_root))
+    bad_run_id = "20260101T000000Z-ffff"
+    bad_directory = runs_root / bad_run_id
+    bad_directory.mkdir()
+    (bad_directory / "run.json").write_text(
+        json.dumps(build_run_payload(metrics=[])),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = list_runs(runs_root)
+
+    assert [record.run_id for record in result] == [good_run_id]
+    assert any(bad_run_id in message for message in caplog.messages)
+
+
 def test_list_runs_includes_running_and_failed_runs(runs_root: Path) -> None:
     """Test list_runs includes runs that are still running or have failed."""
     running_tracker = RunDirectoryTracker(runs_root)
@@ -438,17 +499,20 @@ def test_list_runs_records_have_frozen_mappings(
     tracker: RunDirectoryTracker,
     runs_root: Path,
 ) -> None:
-    """Test records returned by list_runs carry a frozen metrics mapping."""
-    start_tracked_run(tracker)
+    """Test records returned by list_runs freeze metrics, artifacts, and config paths."""
+    start_tracked_run(tracker, configs={"train_config": {"alpha": 1}})
     tracker.record_metrics("train", {"sample_count": 1})
+    tracker.record_artifact("model", Path("model.joblib"))
     tracker.complete_run()
 
     result = list_runs(runs_root)
 
-    metrics = result[0].metrics
-    assert isinstance(metrics, immutabledict)
+    record = result[0]
+    assert isinstance(record.metrics, immutabledict)
+    assert isinstance(record.artifacts, immutabledict)
+    assert isinstance(record.config_paths, immutabledict)
     with pytest.raises(TypeError):
-        metrics["train"] = {}  # type: ignore[index]
+        record.metrics["train"] = {}  # type: ignore[index]
 
 
 # load_run
@@ -532,8 +596,20 @@ def test_load_run_corrupt_record_raises_value_error(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "run_json_content",
-    ["[]", json.dumps({"schema_version": 1, "run_id": "20260101T000000Z-abcd"})],
-    ids=["json-list-root", "missing-status-key"],
+    [
+        "[]",
+        json.dumps({"schema_version": 1, "run_id": "20260101T000000Z-abcd"}),
+        json.dumps(build_run_payload(metrics=["not", "a", "mapping"])),
+        json.dumps(build_run_payload(artifacts="not a mapping")),
+        json.dumps(build_run_payload(configs=7)),
+    ],
+    ids=[
+        "json-list-root",
+        "missing-status-key",
+        "metrics-not-mapping",
+        "artifacts-not-mapping",
+        "configs-not-mapping",
+    ],
 )
 def test_load_run_valid_json_wrong_shape_raises_value_error(
     tmp_path: Path,

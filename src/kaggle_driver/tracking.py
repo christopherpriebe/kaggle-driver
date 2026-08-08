@@ -187,6 +187,10 @@ def _generate_run_id() -> str:
 def _create_run_directory(runs_root: Path) -> tuple[str, Path]:
     """Create a new, uniquely named run directory under ``runs_root``.
 
+    The directory creation itself is the uniqueness check: a collision
+    with an existing directory triggers a retry with a fresh identifier,
+    so two concurrent invocations can never claim the same run directory.
+
     Args:
         runs_root: Directory that holds run directories. Must already
             exist.
@@ -194,13 +198,14 @@ def _create_run_directory(runs_root: Path) -> tuple[str, Path]:
     Returns:
         The generated run identifier and the created run directory.
     """
-    run_id = _generate_run_id()
-    run_directory = runs_root / run_id
-    while run_directory.exists():
+    while True:
         run_id = _generate_run_id()
         run_directory = runs_root / run_id
-    run_directory.mkdir()
-    return run_id, run_directory
+        try:
+            run_directory.mkdir()
+        except FileExistsError:
+            continue
+        return run_id, run_directory
 
 
 def _write_json_atomically(path: Path, payload: Mapping[str, Any]) -> None:
@@ -324,7 +329,7 @@ def _parse_run_payload(run_id: str, payload: object) -> RunRecord:
                 {name: Path(path) for name, path in payload["configs"].items()},
             ),
         )
-    except (KeyError, TypeError, ValueError) as error:
+    except (AttributeError, KeyError, TypeError, ValueError) as error:
         raise ValueError(f"Run record for {run_id!r} has an unexpected shape.") from error
 
 
