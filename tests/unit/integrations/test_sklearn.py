@@ -3,12 +3,36 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
+from sklearn.base import BaseEstimator
 from sklearn.linear_model import LogisticRegression
 
 from kaggle_driver.integrations.sklearn import SklearnModel
+
+
+class _KwargsRecordingEstimator(BaseEstimator):
+    """Estimator that records the fit kwargs it receives and predicts a constant."""
+
+    def __init__(self) -> None:
+        self.seen_fit_kwargs: dict[str, Any] | None = None
+        self._constant = 0
+
+    def fit(
+        self,
+        features: pd.DataFrame,
+        targets: pd.Series,
+        **fit_kwargs: Any,
+    ) -> _KwargsRecordingEstimator:
+        del features
+        self.seen_fit_kwargs = dict(fit_kwargs)
+        self._constant = int(targets.iloc[0])
+        return self
+
+    def predict(self, features: pd.DataFrame) -> list[int]:
+        return [self._constant] * len(features)
 
 
 @pytest.fixture
@@ -60,6 +84,19 @@ def test_test_returns_predictions_keyed_by_id(
 
     assert set(predictions.keys()) == {"5", "6"}
     assert statistics == {"sample_count": 2}
+
+
+def test_train_forwards_fit_kwargs_to_estimator(
+    train_data: dict[str, tuple[pd.Series, int]],
+) -> None:
+    """Test the fit_kwargs config mapping is forwarded to estimator.fit verbatim."""
+    estimator = _KwargsRecordingEstimator()
+    model = SklearnModel(estimator)
+    sample_weight = [1.0, 2.0, 1.0, 2.0]
+
+    model.train(train_data, config={"fit_kwargs": {"sample_weight": sample_weight}})
+
+    assert estimator.seen_fit_kwargs == {"sample_weight": sample_weight}
 
 
 def test_save_load_roundtrip(
