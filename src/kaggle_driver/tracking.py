@@ -7,8 +7,10 @@ driver speaks; :class:`RunDirectoryTracker` is its built-in file-backed
 implementation. :func:`list_runs` and :func:`load_run` read recorded runs
 back as :class:`RunRecord` values.
 
-The full design, including the run directory layout and the ``run.json``
-schema, is documented in ``docs/design/experiment_tracking.md``.
+A run directory is ``<runs_root>/<run_id>/`` holding ``run.json`` (the
+record: schema version, command, model name, status, timestamps, error,
+phase-keyed metrics, artifact paths, and config snapshot paths) and a
+``configs/`` directory of YAML snapshots.
 """
 
 import json

@@ -21,6 +21,10 @@ pyvenv*/
 # Test, coverage, and lint caches
 .pytest_cache/
 runs/
+
+# Working design documents stay local; ROADMAP.md is the only planning
+# document kept in version control.
+docs/design/
 .ruff_cache/
 .mypy_cache/
 .tox/
