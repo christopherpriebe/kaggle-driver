@@ -75,6 +75,10 @@ python titanic.py test logistic_regression --submission submission.csv --test-co
 Where `train.yml` and `test.yml` both contain something like
 `model_path: model.joblib`.
 
+Each `train` and `test` invocation is recorded as a run under `runs/`
+next to wherever you invoked the CLI. Inspect recorded runs with
+`python titanic.py runs list`, or pass `--no-track` to skip recording.
+
 ## What 0.1.0 ships
 
 - `Dataset[I, T]` and `Model[I, T]` generic abstract bases.
@@ -85,9 +89,15 @@ Where `train.yml` and `test.yml` both contain something like
 - `kaggle_driver.integrations.sklearn.SklearnModel` for sklearn estimators.
 - `kaggle_driver.integrations.torch.TorchModel` abstract base for PyTorch
   users (handles state_dict save/load and default device).
+- Experiment tracking, on by default: every `train`/`test` invocation
+  records a run directory under `runs/` with config snapshots,
+  statistics, and artifact paths (`--runs-root` moves it, `--no-track`
+  disables it).
+- `runs list`, `runs show`, and `runs compare` subcommands for
+  inspecting recorded runs.
 
-Tracking, polyglot/non-Python models, and a `submit` subcommand are
-planned for the 0.2.0 release.
+Validation and metrics are planned for the 0.2.0 release; see
+[ROADMAP.md](ROADMAP.md) for the path to 1.0.
 
 ## Documentation
 

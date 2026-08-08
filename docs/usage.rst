@@ -98,6 +98,30 @@ Run it:
     python driver.py train v1 --model-config m.yml --train-config t.yml
     python driver.py test v1 --submission submission.csv --test-config t.yml
 
+Tracking runs
+=============
+
+Every ``train`` and ``test`` invocation is recorded as a run by default.
+A run is a directory under ``runs/`` (next to wherever you invoked the
+CLI) holding a ``run.json`` record: the subcommand, the model name, the
+lifecycle status, timestamps, the statistics the model returned, paths
+to produced artifacts, and YAML snapshots of the resolved configs. A
+run that fails records the error summary and a ``failed`` status, so
+failed experiments stay visible.
+
+Inspect recorded runs with the ``runs`` subcommands:
+
+.. code-block:: bash
+
+    python driver.py runs list
+    python driver.py runs show 20260807T120301Z-1a2b
+    python driver.py runs compare 20260807T120301Z-1a2b 20260807T130502Z-3c4d
+
+Two app-level options control recording:
+
+* ``--runs-root PATH`` records runs under ``PATH`` instead of ``runs/``.
+* ``--no-track`` disables recording for the invocation.
+
 Built-in helpers
 ================
 

@@ -98,8 +98,10 @@ Run it
 Things to try
 =============
 
-* Add a second model class (for example ``RandomForestSurvival``) and
-  register it under a different key in ``models={...}``.
+* Train both shipped models (``logistic_regression`` and
+  ``random_forest``), then put their statistics side by side with
+  ``python tabular_titanic_sklearn.py runs compare <first-run-id>
+  <second-run-id>`` (get the run ids from ``runs list``).
 * Tweak the ``Pipeline`` to include feature engineering. The
   ``SklearnModel`` base wraps any estimator-shaped object, including a
   full ``sklearn.pipeline.Pipeline``.

@@ -1,7 +1,7 @@
 Changelog
 =========
 
-0.1.0 (2026-05-16)
+0.1.0 (2026-08-07)
 ------------------
 
 This release is a near-total rewrite. The 0.0.0 placeholder uploaded to
@@ -18,6 +18,16 @@ Added
   integration.
 * :func:`kaggle_driver.run` entry point: pass a dataset and a
   ``{"name": ModelClass}`` dict and get a Typer-based CLI for free.
+* Experiment tracking, on by default: every ``train`` and ``test``
+  invocation records a run directory under ``runs/`` (``--runs-root``
+  moves it, ``--no-track`` disables it) holding a ``run.json`` record
+  and YAML snapshots of the resolved configs. Failed invocations record
+  the error summary with a ``failed`` status.
+* ``runs list``, ``runs show``, and ``runs compare`` subcommands for
+  inspecting recorded runs.
+* ``kaggle_driver.tracking``: the ``TrackingHook`` protocol, the
+  file-backed ``RunDirectoryTracker``, and the ``list_runs`` and
+  ``load_run`` readers returning frozen ``RunRecord`` values.
 * ``kaggle_driver.integrations.pandas.PandasDataset``: concrete
   ``Dataset`` over flat ``train.csv`` and ``test.csv`` files.
 * ``kaggle_driver.integrations.sklearn.SklearnModel``: concrete ``Model``

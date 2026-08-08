@@ -24,17 +24,14 @@ complete rather than a long train of half-done features.
 - **Breaking changes are allowed until 1.0** and always documented in the
   changelog. After 1.0 the core contract is frozen and semver applies.
 
-## 0.1.0 - The rewrite (current)
+## 0.1.0 - The rewrite and experiment tracking (current)
 
 The near-total rewrite that establishes the public surface: generic
 `Dataset`/`Model` abstract base classes, the Typer CLI via `kd.run`,
 frozen-mapping boundaries, and the pandas/sklearn/torch integrations.
 Ships to PyPI as the first real release.
 
-## 0.2.0 - Experiment tracking
-
-The statistics that `train` and `test` return are currently logged and
-dropped. This release makes every invocation a recorded run.
+It also ships the first battery, experiment tracking:
 
 - Every `train`/`test` invocation writes a timestamped run directory under
   a configurable root (default `runs/`): resolved config snapshots, the
@@ -45,11 +42,10 @@ dropped. This release makes every invocation a recorded run.
 - A tracking hook protocol underneath, designed so external adapters
   (MLflow, Weights & Biases) can be added post-1.0 without breaking the
   run format or the hooks.
-- The run schema anticipates per-fold metrics so 0.3.0 slots in without a
+- The run schema anticipates per-fold metrics so 0.2.0 slots in without a
   format break.
-- Tutorial: tracking and comparing experiments.
 
-## 0.3.0 - Validation and metrics
+## 0.2.0 - Validation and metrics
 
 Every user currently reimplements the split-train-score loop. This release
 makes the framework own it.
@@ -60,36 +56,36 @@ makes the framework own it.
 - Holdout and k-fold strategies, configurable via the validation YAML.
 - A metric protocol: users supply named metric callables; the framework
   reports them per fold and aggregated.
-- Fold-level and aggregate metrics recorded into the 0.2.0 runs directory.
+- Fold-level and aggregate metrics recorded into the 0.1.0 runs directory.
 - Tutorial: validating a model before submitting.
 
-## 0.4.0 - Boosted trees
+## 0.3.0 - Boosted trees
 
 The Kaggle tabular workhorses join the integrations package.
 
 - `LightGBMModel` and `XGBoostModel` behind `[lightgbm]` and `[xgboost]`
   extras, following the `SklearnModel` pattern, with early stopping wired
-  to the validation machinery from 0.3.0.
+  to the validation machinery from 0.2.0.
 - Tutorial: a tabular competition with gradient boosting.
 
-## 0.5.0 - Deepen the existing integrations
+## 0.4.0 - Deepen the existing integrations
 
 No new names; more value from the ones that exist.
 
 - `TorchModel`: opt-in training-loop helpers (batching, device placement,
   epoch loop) so subclasses stop hand-rolling the same fit loop.
 - `PandasDataset`: cache the resolved id column instead of re-reading the
-  train CSV per access; dtype and column-selection controls.
+  test CSV per access; dtype and column-selection controls.
 - `SklearnModel`: probability predictions and pipeline-friendly docs.
 
 ## 1.0.0 - Feature complete
 
 1.0 means the checklist is done, not that a date arrived:
 
-- [ ] Experiment tracking (0.2.0)
-- [ ] Validation and metrics (0.3.0)
-- [ ] LightGBM and XGBoost integrations (0.4.0)
-- [ ] Deepened pandas/sklearn/torch integrations (0.5.0)
+- [x] Experiment tracking (0.1.0)
+- [ ] Validation and metrics (0.2.0)
+- [ ] LightGBM and XGBoost integrations (0.3.0)
+- [ ] Deepened pandas/sklearn/torch integrations (0.4.0)
 - [ ] A tutorial for every battery and complete API reference docs
 - [ ] Core contract unchanged across the two releases before 1.0
 
@@ -105,7 +101,7 @@ Legitimate batteries, deliberately sequenced after the core loop is solid:
 - **Hyperparameter search**: sweep support over model configs, most
   likely as an optuna adapter rather than a homegrown engine.
 - **External tracking adapters**: MLflow and Weights & Biases adapters on
-  the 0.2.0 hook protocol, each behind an extra.
+  the 0.1.0 hook protocol, each behind an extra.
 
 ## Non-goals through 1.0
 
