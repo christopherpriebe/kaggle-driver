@@ -208,8 +208,9 @@ def _test_tracked(
         Frozen test statistics returned by ``Model.test``.
 
     Raises:
-        Exception: Propagated unchanged after the run is recorded as failed;
-            the submission is not written in that case.
+        Exception: Propagated unchanged after the run is recorded as
+            failed. A failure while writing the submission also fails the
+            run; metrics recorded before the failure stay in the record.
     """
     tracker.start_run(
         command=RunCommand.TEST,
@@ -227,13 +228,13 @@ def _test_tracked(
             test_config,
             submission_path,
         )
+        tracker.record_metrics("test", statistics)
+        submission_path.parent.mkdir(parents=True, exist_ok=True)
+        dataset.store_predictions(submission_path, predictions)
     except Exception as error:
         tracker.fail_run(_summarize_error(error))
         raise
 
-    tracker.record_metrics("test", statistics)
-    submission_path.parent.mkdir(parents=True, exist_ok=True)
-    dataset.store_predictions(submission_path, predictions)
     tracker.record_artifact("submission", submission_path)
     _record_model_path_artifact(tracker, test_config)
     tracker.complete_run()
@@ -364,8 +365,8 @@ def test(
     under the ``"test"`` phase, the submission file as the ``submission``
     artifact, the conventional ``model_path`` config key as the ``model``
     artifact when present, and ``complete_run`` on success. If the model
-    raises, ``fail_run`` records the error and the exception propagates
-    unchanged.
+    or the submission write raises, ``fail_run`` records the error and
+    the exception propagates unchanged.
 
     Args:
         dataset: User's ``Dataset`` instance.

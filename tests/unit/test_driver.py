@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import zipfile
 from collections.abc import Mapping
 from pathlib import Path
@@ -245,6 +246,45 @@ def test_download_raises_when_zip_count_unexpected(
         pytest.raises(RuntimeError, match=r"exactly one \.zip"),
     ):
         driver.download(dummy_dataset, info)
+
+
+def test_download_organize_failure_logs_and_reraises(
+    dummy_dataset: _DummyDataset,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test an organizer failure is logged and re-raised out of download."""
+
+    def exploding_organize(
+        unzipped: Path,
+        train_directory: Path,
+        test_directory: Path,
+    ) -> None:
+        del unzipped, train_directory, test_directory
+        raise RuntimeError("cannot organize")
+
+    info = KaggleInfo(competition_name="compy", organize_data_function=exploding_organize)
+    fake_api = MagicMock()  # kaggle is an optional dependency; no real object to autospec against.
+
+    def fake_download(competition: str, path: str) -> None:
+        del competition
+        target = Path(path) / "compy.zip"
+        with zipfile.ZipFile(target, "w") as archive:
+            archive.writestr("payload.csv", "id,value\n1,42\n")
+
+    fake_api.competition_download_files.side_effect = fake_download
+
+    with (
+        patch("kaggle_driver.driver.require_kaggle"),
+        patch.dict(
+            "sys.modules",
+            {"kaggle": MagicMock(api=fake_api)},
+        ),
+        caplog.at_level(logging.ERROR),
+        pytest.raises(RuntimeError, match="cannot organize"),
+    ):
+        driver.download(dummy_dataset, info)
+
+    assert any("organize_data_function failed" in message for message in caplog.messages)
 
 
 def test_require_kaggle_passes_when_installed() -> None:
@@ -590,3 +630,35 @@ def test_test_model_exception_fails_run_and_reraises(
     call_names = [call[0] for call in tracking_hook.calls]
     assert call_names[-1] == "fail_run"
     assert not submission.exists()
+
+
+def test_test_store_predictions_failure_fails_run(
+    dummy_dataset: _DummyDataset,
+    tracking_hook: _RecordingHook,
+    tmp_path: Path,
+) -> None:
+    """Test a submission-write failure fails the run, keeping the recorded metrics."""
+
+    class _ExplodingStoreDataset(_DummyDataset):
+        def store_predictions(self, path: Path, predictions: Mapping[str, int]) -> None:
+            del path, predictions
+            raise OSError("disk full")
+
+    exploding = _ExplodingStoreDataset(
+        raw_train_directory=dummy_dataset.raw_train_directory,
+        raw_test_directory=dummy_dataset.raw_test_directory,
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        driver.test(
+            exploding,
+            _DummyModel,
+            submission_path=tmp_path / "submission.csv",
+            model_config={},
+            test_config={},
+            tracker=tracking_hook,
+        )
+
+    call_names = [call[0] for call in tracking_hook.calls]
+    assert call_names == ["start_run", "record_metrics", "fail_run"]
+    assert "disk full" in tracking_hook.calls[-1][1]
