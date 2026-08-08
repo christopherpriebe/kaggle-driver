@@ -11,7 +11,10 @@ import pytest
 torch = pytest.importorskip("torch")
 from torch import nn  # noqa: E402
 
-from kaggle_driver.integrations.torch import TorchModel  # noqa: E402
+from kaggle_driver.integrations.torch import (  # noqa: E402
+    TorchModel,
+    _select_default_device,
+)
 
 
 class _TinyPerceptron(TorchModel):
@@ -71,3 +74,31 @@ def test_device_reports_a_torch_device() -> None:
     model = _TinyPerceptron(in_features=2, out_features=1)
 
     assert isinstance(model.device, torch.device)
+
+
+def test_select_default_device_prefers_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test CUDA wins device selection when torch reports it available."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    assert _select_default_device() == torch.device("cuda")
+
+
+def test_select_default_device_uses_mps_when_cuda_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test MPS is selected when CUDA is unavailable but MPS is available."""
+    if getattr(torch.backends, "mps", None) is None:
+        pytest.skip("torch build has no MPS backend")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+
+    assert _select_default_device() == torch.device("mps")
+
+
+def test_select_default_device_falls_back_to_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test CPU is the fallback when neither CUDA nor MPS is available."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    if getattr(torch.backends, "mps", None) is not None:
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    assert _select_default_device() == torch.device("cpu")

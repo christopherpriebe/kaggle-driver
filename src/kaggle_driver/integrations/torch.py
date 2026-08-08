@@ -107,13 +107,18 @@ class TorchModel(Model[Any, Any], abc.ABC):
     def load(cls, path: Path) -> "TorchModel":
         """Reconstruct a model previously written by :meth:`save`.
 
+        The checkpoint is read onto the CPU first, so a checkpoint saved
+        on one device (for example CUDA) restores on a machine without
+        that device; the weights are then copied onto the instance's
+        default device.
+
         Args:
             path: File path produced by an earlier :meth:`save` call.
 
         Returns:
             A fresh instance of ``cls`` with weights restored.
         """
-        checkpoint = torch.load(path, weights_only=False)
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
         instance = cls(**checkpoint["init_kwargs"])
         instance._module.load_state_dict(checkpoint["state_dict"])
         return instance

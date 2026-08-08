@@ -10,6 +10,7 @@ Install with ``pip install kaggle-driver[pandas]``.
 # `TypeError: 'type' object is not subscriptable` at import time.
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,30 @@ from immutabledict import immutabledict
 from kaggle_driver.core import Dataset
 
 __all__ = ["PandasDataset"]
+
+
+def _ensure_unique_example_ids(example_ids: list[str], file_name: str) -> None:
+    """Raise when any example id appears more than once.
+
+    A duplicate id would silently overwrite an earlier row in the
+    id-keyed mappings this module builds, shrinking the data and the
+    submission with no visible error.
+
+    Args:
+        example_ids: Id values in row order, already stringified.
+        file_name: CSV filename the ids came from, used in the error
+            message.
+
+    Raises:
+        ValueError: At least one id value appears more than once.
+    """
+    counts = Counter(example_ids)
+    duplicated = sorted(example_id for example_id, count in counts.items() if count > 1)
+    if duplicated:
+        raise ValueError(
+            f"Duplicate id values in {file_name}: {duplicated}. "
+            f"Each row must have a unique value in the id column.",
+        )
 
 
 def _build_train_examples(
@@ -85,8 +110,9 @@ class PandasDataset(Dataset["pd.Series[Any]", Any]):
         raw_train_directory: Directory containing the train CSV.
         raw_test_directory: Directory containing the test CSV.
         target_column: Name of the target column in the train CSV.
-        id_column: Name of the id column in both CSVs. Defaults to the
-            first column of the train CSV.
+        id_column: Name of the id column in both CSVs. When omitted, each
+            CSV falls back to its own first column, and the submission
+            header uses the id column resolved from the test CSV.
         train_file: Train CSV filename. Defaults to ``"train.csv"``.
         test_file: Test CSV filename. Defaults to ``"test.csv"``.
         read_csv_kwargs: Extra kwargs forwarded to ``pandas.read_csv``.
@@ -117,10 +143,15 @@ class PandasDataset(Dataset["pd.Series[Any]", Any]):
 
     @property
     def id_column(self) -> str:
-        """Return the id column name, resolved against the train CSV header."""
+        """Return the id column name, resolved against the test CSV header when unset.
+
+        The submission's rows come from the test CSV, so the default
+        resolution reads that file rather than the train CSV; a machine
+        holding only the test data can still write a submission.
+        """
         if self._id_column is not None:
             return self._id_column
-        return self._resolve_id_column(self._read_train_csv())
+        return self._resolve_id_column(self._read_test_csv())
 
     def _resolve_id_column(self, frame: pd.DataFrame) -> str:
         """Resolve the id column for ``frame``, falling back to its first column.
@@ -153,7 +184,9 @@ class PandasDataset(Dataset["pd.Series[Any]", Any]):
             train CSV row order.
 
         Raises:
-            KeyError: The configured target column is absent from the CSV.
+            KeyError: The configured target column or the resolved id
+                column is absent from the CSV.
+            ValueError: The id column holds duplicate values.
         """
         frame = self._read_train_csv()
         if self._target_column not in frame.columns:
@@ -162,6 +195,15 @@ class PandasDataset(Dataset["pd.Series[Any]", Any]):
                 f"columns are {list(frame.columns)}",
             )
         resolved_id_column = self._resolve_id_column(frame)
+        if resolved_id_column not in frame.columns:
+            raise KeyError(
+                f"Id column {resolved_id_column!r} not found in {self._train_file}; "
+                f"columns are {list(frame.columns)}",
+            )
+        _ensure_unique_example_ids(
+            [str(value) for value in frame[resolved_id_column]],
+            self._train_file,
+        )
         features = frame.drop(columns=[self._target_column])
         targets = frame[self._target_column]
         return _build_train_examples(features, targets, resolved_id_column)
@@ -175,6 +217,7 @@ class PandasDataset(Dataset["pd.Series[Any]", Any]):
 
         Raises:
             KeyError: The resolved id column is absent from the CSV.
+            ValueError: The id column holds duplicate values.
         """
         frame = self._read_test_csv()
         resolved_id_column = self._resolve_id_column(frame)
@@ -183,6 +226,10 @@ class PandasDataset(Dataset["pd.Series[Any]", Any]):
                 f"Id column {resolved_id_column!r} not found in {self._test_file}; "
                 f"columns are {list(frame.columns)}",
             )
+        _ensure_unique_example_ids(
+            [str(value) for value in frame[resolved_id_column]],
+            self._test_file,
+        )
         return _build_test_inputs(frame, resolved_id_column)
 
     def store_predictions(
