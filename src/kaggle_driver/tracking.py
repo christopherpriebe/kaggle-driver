@@ -162,6 +162,7 @@ class _RunState:
     started_at: datetime
     config_paths: dict[str, Path]
     status: RunStatus = RunStatus.RUNNING
+    finished_at: datetime | None = None
     error: str | None = None
     metrics: dict[str, dict[str, Any]] = field(default_factory=dict)
     artifacts: dict[str, Path] = field(default_factory=dict)
@@ -179,6 +180,25 @@ def _generate_run_id() -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     suffix = secrets.token_hex(_RUN_ID_SUFFIX_BYTES)
     return f"{timestamp}-{suffix}"
+
+
+def _create_run_directory(runs_root: Path) -> tuple[str, Path]:
+    """Create a new, uniquely named run directory under ``runs_root``.
+
+    Args:
+        runs_root: Directory that holds run directories. Must already
+            exist.
+
+    Returns:
+        The generated run identifier and the created run directory.
+    """
+    run_id = _generate_run_id()
+    run_directory = runs_root / run_id
+    while run_directory.exists():
+        run_id = _generate_run_id()
+        run_directory = runs_root / run_id
+    run_directory.mkdir()
+    return run_id, run_directory
 
 
 def _write_json_atomically(path: Path, payload: Mapping[str, Any]) -> None:
@@ -213,13 +233,11 @@ def _snapshot_configs(configs_directory: Path, configs: Mapping[str, Mapping[str
         config_path.write_text(yaml.safe_dump(dict(config)), encoding="utf-8")
 
 
-def _run_record_to_payload(state: _RunState, finished_at: datetime | None) -> dict[str, Any]:
+def _run_record_to_payload(state: _RunState) -> dict[str, Any]:
     """Build the JSON-serializable payload for a run record.
 
     Args:
         state: Current in-memory run state.
-        finished_at: Timezone-aware UTC finalization time, or ``None`` for
-            a run still in progress.
 
     Returns:
         A plain ``dict`` matching the ``run.json`` schema.
@@ -231,7 +249,7 @@ def _run_record_to_payload(state: _RunState, finished_at: datetime | None) -> di
         "model_name": state.model_name,
         "status": state.status.value,
         "started_at": state.started_at.isoformat(),
-        "finished_at": finished_at.isoformat() if finished_at is not None else None,
+        "finished_at": state.finished_at.isoformat() if state.finished_at is not None else None,
         "error": state.error,
         "metrics": {phase: dict(metrics) for phase, metrics in state.metrics.items()},
         "artifacts": {name: str(path) for name, path in state.artifacts.items()},
@@ -239,7 +257,7 @@ def _run_record_to_payload(state: _RunState, finished_at: datetime | None) -> di
     }
 
 
-def _load_run_payload(run_directory: Path, run_id: str) -> Any:
+def _load_run_payload(run_directory: Path, run_id: str) -> object:
     """Read and JSON-decode the ``run.json`` file in ``run_directory``.
 
     Args:
@@ -262,7 +280,7 @@ def _load_run_payload(run_directory: Path, run_id: str) -> Any:
         raise ValueError(f"Run record for {run_id!r} is not valid JSON.") from error
 
 
-def _parse_run_payload(run_id: str, payload: Any) -> RunRecord:
+def _parse_run_payload(run_id: str, payload: object) -> RunRecord:
     """Parse a decoded ``run.json`` payload into a :class:`RunRecord`.
 
     Args:
@@ -346,6 +364,9 @@ class RunDirectoryTracker:
     def _require_started(self) -> _RunState:
         """Return the run state, requiring that a run has started.
 
+        Returns:
+            The current run state.
+
         Raises:
             RuntimeError: ``start_run`` has not been called.
         """
@@ -356,6 +377,9 @@ class RunDirectoryTracker:
     def _require_running(self) -> _RunState:
         """Return the run state, requiring that the run is still running.
 
+        Returns:
+            The current run state.
+
         Raises:
             RuntimeError: The run has not started or is already finalized.
         """
@@ -364,15 +388,13 @@ class RunDirectoryTracker:
             raise RuntimeError(f"Run {state.run_id!r} has already finalized.")
         return state
 
-    def _write_record(self, state: _RunState, *, finished_at: datetime | None) -> None:
+    def _write_record(self, state: _RunState) -> None:
         """Write the current state of ``state`` to its ``run.json``, atomically.
 
         Args:
             state: Run state to serialize.
-            finished_at: Finalization time to record, or ``None`` while the
-                run is still running.
         """
-        payload = _run_record_to_payload(state, finished_at)
+        payload = _run_record_to_payload(state)
         _write_json_atomically(state.run_directory / _RUN_JSON_NAME, payload)
 
     def start_run(
@@ -398,12 +420,7 @@ class RunDirectoryTracker:
             raise RuntimeError("start_run has already been called on this tracker.")
 
         self._runs_root.mkdir(parents=True, exist_ok=True)
-        run_id = _generate_run_id()
-        run_directory = self._runs_root / run_id
-        while run_directory.exists():
-            run_id = _generate_run_id()
-            run_directory = self._runs_root / run_id
-        run_directory.mkdir()
+        run_id, run_directory = _create_run_directory(self._runs_root)
 
         state = _RunState(
             run_id=run_id,
@@ -416,7 +433,7 @@ class RunDirectoryTracker:
         self._state = state
 
         _snapshot_configs(run_directory / _CONFIGS_DIRECTORY_NAME, configs)
-        self._write_record(state, finished_at=None)
+        self._write_record(state)
 
     def record_metrics(self, phase: str, metrics: Mapping[str, Any]) -> None:
         """Attach a statistics mapping under a phase key.
@@ -454,7 +471,8 @@ class RunDirectoryTracker:
         """
         state = self._require_running()
         state.status = RunStatus.COMPLETED
-        self._write_record(state, finished_at=datetime.now(timezone.utc))
+        state.finished_at = datetime.now(timezone.utc)
+        self._write_record(state)
 
     def fail_run(self, error: str) -> None:
         """Rewrite the record with status failed and the error summary.
@@ -469,7 +487,8 @@ class RunDirectoryTracker:
         state = self._require_running()
         state.status = RunStatus.FAILED
         state.error = error
-        self._write_record(state, finished_at=datetime.now(timezone.utc))
+        state.finished_at = datetime.now(timezone.utc)
+        self._write_record(state)
 
 
 def list_runs(runs_root: Path | str) -> tuple[RunRecord, ...]:

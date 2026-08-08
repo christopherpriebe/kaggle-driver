@@ -128,25 +128,15 @@ def _train_tracked(
     tracker: TrackingHook,
     model_name: str | None,
 ) -> immutabledict[str, Any]:
-    """Run a tracked train invocation, recording it as a run.
+    """Instantiate and train the model, recording the invocation as a run.
 
-    Args:
-        dataset: User's ``Dataset`` instance.
-        model_class: Model class to instantiate. Constructor receives
-            ``model_config`` as kwargs.
-        model_config: Kwargs forwarded to ``model_class``.
-        train_config: Free-form training configuration passed to
-            ``Model.train``. Frozen before it reaches the model.
-        tracker: Tracking hook recording the run.
-        model_name: Name recorded in the run record, or ``None`` to
-            default to ``model_class.__name__``.
+    See ``train`` for the tracked-behavior contract.
 
     Returns:
         Frozen training statistics returned by ``Model.train``.
 
     Raises:
-        Exception: Propagated unchanged from ``model_class`` or
-            ``Model.train`` after the run is recorded as failed.
+        Exception: Propagated unchanged after the run is recorded as failed.
     """
     tracker.start_run(
         command=RunCommand.TRAIN,
@@ -210,27 +200,16 @@ def _test_tracked(
     tracker: TrackingHook,
     model_name: str | None,
 ) -> immutabledict[str, Any]:
-    """Run a tracked test invocation, recording it as a run.
+    """Instantiate the model, generate predictions, and record the invocation as a run.
 
-    Args:
-        dataset: User's ``Dataset`` instance.
-        model_class: Model class to instantiate. Constructor receives
-            ``model_config`` as kwargs.
-        submission_path: File path to write the submission to.
-        model_config: Kwargs forwarded to ``model_class``.
-        test_config: Free-form test configuration passed to ``Model.test``.
-            Frozen before it reaches the model.
-        tracker: Tracking hook recording the run.
-        model_name: Name recorded in the run record, or ``None`` to
-            default to ``model_class.__name__``.
+    See ``test`` for the tracked-behavior contract.
 
     Returns:
         Frozen test statistics returned by ``Model.test``.
 
     Raises:
-        Exception: Propagated unchanged from ``model_class`` or
-            ``Model.test`` after the run is recorded as failed; the
-            submission is not written in that case.
+        Exception: Propagated unchanged after the run is recorded as failed;
+            the submission is not written in that case.
     """
     tracker.start_run(
         command=RunCommand.TEST,

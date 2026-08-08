@@ -30,6 +30,10 @@ _logger = logging.getLogger(__name__)
 
 _RUN_JSON_FILENAME = "run.json"
 _MINIMUM_COMPARE_RUN_COUNT = 2
+_LIST_COMMAND_WIDTH = 5
+_LIST_MODEL_WIDTH = 15
+_LIST_STATUS_WIDTH = 9
+_COMPARE_LABEL_WIDTH = 20
 
 
 def _resolve_model(
@@ -124,8 +128,9 @@ def _format_run_summary(record: RunRecord) -> str:
     """
     metrics_summary = _format_metrics_summary(record.metrics)
     return (
-        f"{record.run_id}  {record.command.value:<5}  {record.model_name:<15}  "
-        f"{record.status.value:<9}  {metrics_summary}"
+        f"{record.run_id}  {record.command.value:<{_LIST_COMMAND_WIDTH}}  "
+        f"{record.model_name:<{_LIST_MODEL_WIDTH}}  "
+        f"{record.status.value:<{_LIST_STATUS_WIDTH}}  {metrics_summary}"
     )
 
 
@@ -157,12 +162,13 @@ def _format_compare_table(records: list[RunRecord]) -> str:
         metric key (grouped by phase, unioned across ``records``), with
         ``"-"`` where a run lacks that key.
     """
-    label_width = 20
-    lines = ["  ".join(["metric".ljust(label_width), *(record.run_id for record in records)])]
+    lines = [
+        "  ".join(["metric".ljust(_COMPARE_LABEL_WIDTH), *(record.run_id for record in records)]),
+    ]
     phases = sorted({phase for record in records for phase in record.metrics})
     for phase in phases:
         for key in _metric_keys_for_phase(records, phase):
-            row_label = f"{phase}.{key}".ljust(label_width)
+            row_label = f"{phase}.{key}".ljust(_COMPARE_LABEL_WIDTH)
             values = [str(record.metrics.get(phase, {}).get(key, "-")) for record in records]
             lines.append("  ".join([row_label, *values]))
     return "\n".join(lines)
@@ -260,6 +266,8 @@ def build_app(
     @runs_app.command(name="show")
     def show_command(run_id: Annotated[str, typer.Argument()]) -> None:
         """Show the full record of one run."""
+        # Validate via _load_run_or_exit for the shape/error checks, but print the
+        # stored record verbatim rather than reserializing the parsed dataclass.
         _load_run_or_exit(tracking_options.runs_root, run_id)
         run_json_path = tracking_options.runs_root / run_id / _RUN_JSON_FILENAME
         payload = json.loads(run_json_path.read_text(encoding="utf-8"))
