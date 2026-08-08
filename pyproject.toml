@@ -132,6 +132,7 @@ ignore = [
     "RUF001",  # ambiguous unicode character in string
     "S101",    # assert is fine in tests
     "PLR0913", # too many arguments; handled by pylint
+    "PLC0415", # deferred imports keep optional extras optional; mirrors the pylint disable
 ]
 
 [tool.ruff.lint.pydocstyle]
