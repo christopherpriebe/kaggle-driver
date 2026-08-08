@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 import typer
+from immutabledict import immutabledict
 from typer.testing import CliRunner
 
 from kaggle_driver import KaggleInfo
@@ -60,11 +64,24 @@ def test_train_dispatches_to_driver(
 ) -> None:
     """Test the train subcommand instantiates the named model and calls its train method."""
     monkeypatch.chdir(tmp_path)
-    app = build_dummy_app(dummy_dataset)
+    trained_with: list[Mapping[str, tuple[int, int]]] = []
+
+    class CapturingModel(_DummyModel):
+        def train(
+            self,
+            train_data: Mapping[str, tuple[int, int]],
+            config: Mapping[str, Any],
+        ) -> Mapping[str, Any]:
+            trained_with.append(train_data)
+            return super().train(train_data, config)
+
+    app = build_app(dummy_dataset, {"dummy": CapturingModel}, kaggle_info=None)
 
     result = cli_runner.invoke(app, ["train", "dummy"])
 
     assert result.exit_code == 0, result.stdout
+    assert len(trained_with) == 1
+    assert dict(trained_with[0]) == {"a": (1, 2), "b": (3, 4), "c": (5, 6)}
 
 
 def test_unknown_model_name_is_rejected(
@@ -135,13 +152,27 @@ def test_train_loads_optional_yaml(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test providing --train-config loads the YAML into a frozen mapping."""
+    """Test --train-config content reaches the model as a frozen mapping."""
     monkeypatch.chdir(tmp_path)
-    app = build_dummy_app(dummy_dataset)
+    seen_configs: list[Mapping[str, Any]] = []
+
+    class CapturingModel(_DummyModel):
+        def train(
+            self,
+            train_data: Mapping[str, tuple[int, int]],
+            config: Mapping[str, Any],
+        ) -> Mapping[str, Any]:
+            seen_configs.append(config)
+            return super().train(train_data, config)
+
+    app = build_app(dummy_dataset, {"dummy": CapturingModel}, kaggle_info=None)
 
     result = cli_runner.invoke(app, ["train", "dummy", "--train-config", str(tmp_yaml_config)])
 
     assert result.exit_code == 0, result.stdout
+    assert len(seen_configs) == 1
+    assert isinstance(seen_configs[0], immutabledict)
+    assert dict(seen_configs[0]) == {"alpha": 0.5, "beta": 3, "note": "hello"}
 
 
 def test_train_records_run_by_default(
@@ -415,3 +446,76 @@ def test_runs_compare_single_id_fails_with_usage_error(
     stdout_lower = result.stdout.lower()
     stderr_lower = (result.stderr or "").lower()
     assert "at least two" in stdout_lower or "at least two" in stderr_lower
+
+
+def test_runs_compare_unknown_id_fails_with_message(
+    dummy_dataset: _DummyDataset,
+    cli_runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test runs compare exits nonzero and names the unknown id among valid ones."""
+    monkeypatch.chdir(tmp_path)
+    app = build_dummy_app(dummy_dataset)
+    cli_runner.invoke(app, ["train", "dummy"])
+    known_run_id = next((tmp_path / "runs").iterdir()).name
+
+    result = cli_runner.invoke(app, ["runs", "compare", known_run_id, "bogus-run-id"])
+
+    assert result.exit_code != 0
+    assert "bogus-run-id" in result.stdout or "bogus-run-id" in (result.stderr or "")
+
+
+def test_runs_compare_columns_align(
+    dummy_dataset: _DummyDataset,
+    cli_runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test each metric value starts at the same column as its run id header."""
+    monkeypatch.chdir(tmp_path)
+    app = build_dummy_app(dummy_dataset)
+    runs_root = tmp_path / "runs"
+    first_tracker = RunDirectoryTracker(runs_root)
+    first_tracker.start_run(command=RunCommand.TRAIN, model_name="first", configs={})
+    first_tracker.record_metrics("train", {"alpha": 1})
+    first_tracker.complete_run()
+    second_tracker = RunDirectoryTracker(runs_root)
+    second_tracker.start_run(command=RunCommand.TRAIN, model_name="second", configs={})
+    second_tracker.record_metrics("train", {"alpha": 123456})
+    second_tracker.complete_run()
+
+    result = cli_runner.invoke(
+        app,
+        ["runs", "compare", first_tracker.run_id, second_tracker.run_id],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    header, alpha_row = result.stdout.splitlines()[:2]
+    assert alpha_row.index("1") == header.index(first_tracker.run_id)
+    assert alpha_row.index("123456") == header.index(second_tracker.run_id)
+
+
+def test_verbose_flag_sets_info_level_logging(
+    dummy_dataset: _DummyDataset,
+    cli_runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test --verbose configures INFO-level logging and the default stays at WARNING."""
+    monkeypatch.chdir(tmp_path)
+    app = build_dummy_app(dummy_dataset)
+    configured_levels: list[int] = []
+
+    def capture_level(*args: Any, **kwargs: Any) -> None:
+        del args
+        configured_levels.append(kwargs["level"])
+
+    monkeypatch.setattr("kaggle_driver.cli.logging.basicConfig", capture_level)
+
+    verbose_result = cli_runner.invoke(app, ["--verbose", "--no-track", "train", "dummy"])
+    default_result = cli_runner.invoke(app, ["--no-track", "train", "dummy"])
+
+    assert verbose_result.exit_code == 0, verbose_result.stdout
+    assert default_result.exit_code == 0, default_result.stdout
+    assert configured_levels == [logging.INFO, logging.WARNING]

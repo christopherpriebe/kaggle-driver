@@ -22,13 +22,18 @@ from immutabledict import immutabledict
 from kaggle_driver import driver
 from kaggle_driver.config import load_yaml_config
 from kaggle_driver.core import Dataset, KaggleInfo, Model, freeze_mapping
-from kaggle_driver.tracking import RunDirectoryTracker, RunRecord, list_runs, load_run
+from kaggle_driver.tracking import (
+    _RUN_JSON_NAME,
+    RunDirectoryTracker,
+    RunRecord,
+    list_runs,
+    load_run,
+)
 
 __all__ = ["build_app"]
 
 _logger = logging.getLogger(__name__)
 
-_RUN_JSON_FILENAME = "run.json"
 _MINIMUM_COMPARE_RUN_COUNT = 2
 _LIST_COMMAND_WIDTH = 5
 _LIST_MODEL_WIDTH = 15
@@ -160,18 +165,27 @@ def _format_compare_table(records: list[RunRecord]) -> str:
     Returns:
         A multi-line table: a header row of run ids, then one row per
         metric key (grouped by phase, unioned across ``records``), with
-        ``"-"`` where a run lacks that key.
+        ``"-"`` where a run lacks that key. Every column is padded to the
+        width of its widest cell so values line up under their run ids.
     """
-    lines = [
-        "  ".join(["metric".ljust(_COMPARE_LABEL_WIDTH), *(record.run_id for record in records)]),
-    ]
+    rows = [["metric", *(record.run_id for record in records)]]
     phases = sorted({phase for record in records for phase in record.metrics})
     for phase in phases:
         for key in _metric_keys_for_phase(records, phase):
-            row_label = f"{phase}.{key}".ljust(_COMPARE_LABEL_WIDTH)
-            values = [str(record.metrics.get(phase, {}).get(key, "-")) for record in records]
-            lines.append("  ".join([row_label, *values]))
-    return "\n".join(lines)
+            rows.append(
+                [
+                    f"{phase}.{key}",
+                    *(str(record.metrics.get(phase, {}).get(key, "-")) for record in records),
+                ],
+            )
+    column_widths = [max(len(row[position]) for row in rows) for position in range(len(rows[0]))]
+    column_widths[0] = max(column_widths[0], _COMPARE_LABEL_WIDTH)
+    return "\n".join(
+        "  ".join(
+            cell.ljust(width) for cell, width in zip(row, column_widths, strict=True)
+        ).rstrip()
+        for row in rows
+    )
 
 
 def _load_run_or_exit(runs_root: Path, run_id: str) -> RunRecord:
@@ -269,7 +283,7 @@ def build_app(
         # Validate via _load_run_or_exit for the shape/error checks, but print the
         # stored record verbatim rather than reserializing the parsed dataclass.
         _load_run_or_exit(tracking_options.runs_root, run_id)
-        run_json_path = tracking_options.runs_root / run_id / _RUN_JSON_FILENAME
+        run_json_path = tracking_options.runs_root / run_id / _RUN_JSON_NAME
         payload = json.loads(run_json_path.read_text(encoding="utf-8"))
         typer.echo(json.dumps(payload, indent=2))
 
